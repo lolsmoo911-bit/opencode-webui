@@ -4,6 +4,7 @@ import webui from "./service.ts";
 
 export default module("opencode-webui", ({ provision }) => {
   provision(webui, {
+    id: "webui",
     input: {
       password: envSecret("WEBUI_PASSWORD"),
     },
