@@ -20,6 +20,7 @@
  */
 
 import { Service } from "@opencode/client/service";
+import service from "../service.ts";
 import type { Server } from "bun";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, watch, appendFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -103,7 +104,22 @@ if (process.argv.includes("sandbox")) {
 
 // Serve/security settings: env > ~/.config/opencode/webui/config.json > default
 // (server/config.ts). Read once — changing them requires a restart.
-const CONFIG = resolveConfig();
+// Prisma Composer supplies the port and secret at runtime.
+const SERVICE_INPUT = service.input();
+process.env.WEBUI_PASSWORD = SERVICE_INPUT.password.expose();
+process.env.WEBUI_NO_SETUP = "1";
+
+function resolveRuntimeConfig() {
+  return {
+    ...resolveConfig(),
+    host: "0.0.0.0",
+    port: service.port(),
+    trustProxy: true,
+    autostart: false,
+  };
+}
+
+const CONFIG = resolveRuntimeConfig();
 const PROXY_PORT = CONFIG.port;
 // Client headers never forwarded to the engine: transport (recomputed by Bun
 // from the proxied request), identity (must WIN over anything the client
@@ -1745,7 +1761,7 @@ function sanitizePatch(body: unknown): ConfigPatch {
 /** Effective state + provenance + restart delta, safe to send to the browser. */
 function settingsPayload() {
   const file = readFileConfig();
-  const now = resolveConfig();
+  const now = resolveRuntimeConfig();
   const restartRequired =
     now.host !== CONFIG.host ||
     now.port !== CONFIG.port ||
