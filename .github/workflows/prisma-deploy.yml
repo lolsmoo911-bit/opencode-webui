@@ -1,5 +1,7 @@
 name: prisma-deploy
 
+# The preview environment sets NODE_ENV=production and XDG_* paths for writable OpenCode state.
+
 on:
   push:
     branches:
