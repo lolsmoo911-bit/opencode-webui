@@ -22,6 +22,7 @@
 import { Service } from "@opencode/client/service";
 import service from "../service.ts";
 import { x as extractTar } from "tar";
+import { PRISMA_ASSETS } from "./prisma-assets";
 import type { Server } from "bun";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, watch, appendFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -1714,6 +1715,26 @@ const server: Server<Record<string, unknown>> = Bun.serve({
         if (filePath === "/") filePath = "/index.html";
         // Confine to dist/: a decoded "/..%2f" must not escape the static
         // root (arbitrary file read = secret.key = cookie forgery).
+        // Prisma Composer runs this server from a virtual Bun bundle. Static
+        // browser assets are not runtime imports, so serve the build-time embedded
+        // asset map instead of expecting a physical dist/ directory at runtime.
+        if (SERVICE_INPUT !== undefined) {
+          const requested = PRISMA_ASSETS[filePath];
+          const embedded = requested ?? PRISMA_ASSETS["/index.html"];
+          if (!embedded) {
+            console.error("[webui] frontend assets missing from bundle; the build must run scripts/prisma-assets.ts");
+            return new Response("frontend assets missing from deployment bundle", { status: 500 });
+          }
+          const servedPath = requested ? filePath : "/index.html";
+          const immutable = /-[A-Za-z0-9_-]{8}\\.[a-z0-9]+$/.test(servedPath);
+          const bytes = Uint8Array.from(atob(embedded.base64), (char) => char.charCodeAt(0));
+          return new Response(method === "HEAD" ? null : bytes, {
+            headers: {
+              "content-type": embedded.contentType,
+              "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-store",
+            },
+          });
+        }
         const resolved = resolve(DIST_DIR, "." + filePath);
         if (!resolved.startsWith(resolve(DIST_DIR))) {
           return new Response("not found", { status: 404 });
