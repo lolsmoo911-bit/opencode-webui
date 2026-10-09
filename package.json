@@ -33,7 +33,7 @@
     "dev:web": "vite",
     "dev:server": "bun run --watch server/index.ts",
     "sandbox": "bun run scripts/sandbox.ts",
-    "build": "vite build && bun build server/index.ts --target=bun --outfile=dist/server.mjs",
+    "build": "vite build && bun run scripts/prisma-assets.ts && bun build server/index.ts --target=bun --outfile=dist/server.mjs",
     "start": "NODE_ENV=production bun run server/index.ts",
     "typecheck": "tsc --noEmit",
     "gen:skill": "bun run scripts/gen-skill.ts",
