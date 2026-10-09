@@ -1,6 +1,6 @@
 {
   "name": "opencode-webui",
-  "description": "Web UI for the OpenCode coding agent \u2014 chat, streaming, tool cards, and extensions over the OpenCode engine's HTTP API.",
+  "description": "Web UI for the OpenCode coding agent — chat, streaming, tool cards, and extensions over the OpenCode engine's HTTP API.",
   "private": false,
   "type": "module",
   "version": "3.3.0",
@@ -33,7 +33,7 @@
     "dev:web": "vite",
     "dev:server": "bun run --watch server/index.ts",
     "sandbox": "bun run scripts/sandbox.ts",
-    "build": "vite build",
+    "build": "vite build && bun build server/index.ts --target=bun --outfile=dist/server.mjs",
     "start": "NODE_ENV=production bun run server/index.ts",
     "typecheck": "tsc --noEmit",
     "gen:skill": "bun run scripts/gen-skill.ts",
@@ -73,6 +73,10 @@
     "@vitejs/plugin-react": "^6.0.5",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vite": "^8.2.1"
+    "vite": "^8.2.1",
+    "@prisma/composer": "latest",
+    "@prisma/composer-prisma-cloud": "latest",
+    "arktype": "latest",
+    "prisma": "latest"
   }
 }
