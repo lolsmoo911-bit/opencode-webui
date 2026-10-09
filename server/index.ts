@@ -194,7 +194,7 @@ async function ensureOpenCodeCli(): Promise<void> {
     console.error("[webui] OpenCode CLI setup failed:", error instanceof Error ? error.message : String(error));
   }
 }
-await ensureOpenCodeCli();
+const openCodeCliReady = ensureOpenCodeCli();
 
 // A repo checkout (vite.config.ts present) runs the two-port dev topology:
 // Vite serves the UI and proxies /api to this proxy. Settings that only make
@@ -323,7 +323,10 @@ async function discoverEngine(): Promise<EngineEndpoint | undefined> {
 
 const engineResolver = createEngineResolver({
   discover: () => discoverEngine(),
-  ensure: () => Service.ensure(),
+  ensure: async () => {
+    await openCodeCliReady;
+    return Service.ensure();
+  },
   resolveOverride: resolveEngineOverride,
   onConnected: (url, suffix) =>
     console.log(`[webui] connected to opencode service at ${url}${suffix}`),
