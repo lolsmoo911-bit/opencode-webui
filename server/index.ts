@@ -1318,17 +1318,18 @@ if (await existingWebuiOnPort(PROXY_PORT)) {
 // going and let the recorder/API connect when it is ready. Never fatal: the
 // promise is normalized so a rejection can never reach this top-level await.
 let ENGINE_LINE = "[webui] engine: starting the opencode background service…";
-const engineAttempt = serviceEndpoint().then(
-  (ep) => ep,
+// Resolve the OpenCode engine in the background so the WebUI becomes available
+// even while the CLI is being downloaded. API requests share the resolver promise.
+void serviceEndpoint().then(
+  (ep) => {
+    ENGINE_LINE = `[webui] engine: opencode service at ${ep.url}`;
+    console.log(ENGINE_LINE);
+  },
   (err) => {
     ENGINE_LINE = `[webui] engine: NOT running — ${err instanceof Error ? err.message : String(err)} (start it with \`opencode service start\`)`;
     console.error(ENGINE_LINE);
-    return null;
   },
 );
-const engineDeadline = new Promise<null>((resolve) => setTimeout(() => resolve(null), 6_000));
-const engineEndpoint = await Promise.race([engineAttempt, engineDeadline]);
-if (engineEndpoint) ENGINE_LINE = `[webui] engine: opencode service at ${engineEndpoint.url}`;
 
 const server: Server<Record<string, unknown>> = Bun.serve({
   port: PROXY_PORT,
