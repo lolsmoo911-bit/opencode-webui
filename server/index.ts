@@ -21,13 +21,15 @@
 
 import { Service } from "@opencode/client/service";
 import service from "../service.ts";
+import OPENCODE_CLI_GZIP_BASE64 from "./opencode-cli.b64" with { type: "text" };
 import { spawnSync } from "node:child_process";
+import { gunzipSync } from "node:zlib";
 import type { Server } from "bun";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, watch, appendFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, watch, appendFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { appendFile } from "node:fs/promises";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   SANDBOX,
@@ -145,20 +147,25 @@ const BIND_HOST = HOST === "localhost" ? "127.0.0.1" : HOST;
 // path that scripts/embed-shim.ts maps onto the embedded assets.
 const DIST_DIR = fileURLToPath(new URL("../dist/", import.meta.url));
 const APP_ROOT = fileURLToPath(new URL("../", import.meta.url));
-// Make the packaged OpenCode CLI discoverable by Service.ensure().
-process.env.PATH = [DIST_DIR, process.env.PATH].filter(Boolean).join(delimiter);
-
-const OPENCODE_CLI_PATH = join(DIST_DIR, "opencode");
+// OpenCode's native CLI is compressed into this bundle so Composer cannot drop it
+// as a sidecar asset. Restore it into writable temporary storage at startup.
+const OPENCODE_RUNTIME_DIR = join(tmpdir(), "opencode-webui-runtime");
+const OPENCODE_CLI_PATH = join(OPENCODE_RUNTIME_DIR, "opencode");
 try {
+  mkdirSync(OPENCODE_RUNTIME_DIR, { recursive: true, mode: 0o700 });
+  const executable = gunzipSync(Buffer.from(OPENCODE_CLI_GZIP_BASE64, "base64"));
+  writeFileSync(OPENCODE_CLI_PATH, executable, { mode: 0o700 });
+  chmodSync(OPENCODE_CLI_PATH, 0o700);
+  process.env.PATH = [OPENCODE_RUNTIME_DIR, process.env.PATH].filter(Boolean).join(delimiter);
   const cliProbe = spawnSync(OPENCODE_CLI_PATH, ["--version"], {
     encoding: "utf8",
     timeout: 5000,
   });
   console.log(
-    `[webui] OpenCode CLI preflight: found=${existsSync(OPENCODE_CLI_PATH)} status=${cliProbe.status ?? "none"} signal=${cliProbe.signal ?? "none"} error=${cliProbe.error?.message ?? "none"} version=${(cliProbe.stdout ?? "").trim().slice(0, 120)} stderr=${(cliProbe.stderr ?? "").trim().slice(0, 240)}`,
+    `[webui] OpenCode CLI preflight: restoredBytes=${executable.length} status=${cliProbe.status ?? "none"} signal=${cliProbe.signal ?? "none"} error=${cliProbe.error?.message ?? "none"} version=${(cliProbe.stdout ?? "").trim().slice(0, 120)} stderr=${(cliProbe.stderr ?? "").trim().slice(0, 240)}`,
   );
 } catch (error) {
-  console.error("[webui] OpenCode CLI preflight threw:", error instanceof Error ? error.message : String(error));
+  console.error("[webui] OpenCode CLI preflight failed:", error instanceof Error ? error.message : String(error));
 }
 
 // A repo checkout (vite.config.ts present) runs the two-port dev topology:
