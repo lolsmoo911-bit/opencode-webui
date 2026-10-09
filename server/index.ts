@@ -25,7 +25,7 @@ import type { Server } from "bun";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, watch, appendFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { appendFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
@@ -144,6 +144,8 @@ const BIND_HOST = HOST === "localhost" ? "127.0.0.1" : HOST;
 // path that scripts/embed-shim.ts maps onto the embedded assets.
 const DIST_DIR = fileURLToPath(new URL("../dist/", import.meta.url));
 const APP_ROOT = fileURLToPath(new URL("../", import.meta.url));
+// Make the packaged OpenCode CLI discoverable by Service.ensure().
+process.env.PATH = [DIST_DIR, process.env.PATH].filter(Boolean).join(delimiter);
 // A repo checkout (vite.config.ts present) runs the two-port dev topology:
 // Vite serves the UI and proxies /api to this proxy. Settings that only make
 // sense for the one-port production topology are flagged in the API below.
