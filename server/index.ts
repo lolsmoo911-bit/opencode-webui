@@ -109,6 +109,17 @@ if (process.argv.includes("sandbox")) {
 const SERVICE_INPUT = service.input();
 process.env.WEBUI_PASSWORD = SERVICE_INPUT.password.expose();
 process.env.WEBUI_NO_SETUP = "1";
+// Prisma Compute's home directory is not writable. Give OpenCode a writable,
+// ephemeral home/XDG tree under /tmp so its CLI can create logs and session state.
+const RUNTIME_HOME = join(tmpdir(), "opencode-webui-home");
+process.env.HOME = RUNTIME_HOME;
+process.env.XDG_DATA_HOME = join(RUNTIME_HOME, "data");
+process.env.XDG_STATE_HOME = join(RUNTIME_HOME, "state");
+process.env.XDG_CONFIG_HOME = join(RUNTIME_HOME, "config");
+for (const dir of [process.env.HOME, process.env.XDG_DATA_HOME, process.env.XDG_STATE_HOME, process.env.XDG_CONFIG_HOME]) {
+  mkdirSync(dir!, { recursive: true, mode: 0o700 });
+}
+process.env.NODE_ENV = "production";
 
 function resolveRuntimeConfig() {
   return {
@@ -1688,7 +1699,9 @@ const server: Server<Record<string, unknown>> = Bun.serve({
     // installed package (no src/ on disk) vs a dev checkout (vite owns the
     // frontend). Dev with a stale dist/ still goes to vite for HMR.
     const hasDist = existsSync(join(DIST_DIR, "index.html"));
-    if (Bun.env.NODE_ENV === "production" || (hasDist && !IS_DEV)) {
+    // Composer's bundle contains the repository's vite.config.ts, so IS_DEV
+    // alone must not route the deployed UI to a non-running Vite port.
+    if (Bun.env.NODE_ENV === "production" || SERVICE_INPUT !== undefined || (hasDist && !IS_DEV)) {
       if (method === "GET" || method === "HEAD") {
         // decodeURIComponent throws on malformed escapes (e.g. "/%") — 400,
         // never an unhandled throw.
