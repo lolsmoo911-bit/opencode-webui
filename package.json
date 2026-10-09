@@ -33,7 +33,7 @@
     "dev:web": "vite",
     "dev:server": "bun run --watch server/index.ts",
     "sandbox": "bun run scripts/sandbox.ts",
-    "build": "vite build && bun build server/index.ts --target=bun --outfile=dist/server.mjs && cp -L node_modules/@opencode/cli/bin/opencode dist/opencode && chmod +x dist/opencode",
+    "build": "node node_modules/@opencode/cli/postinstall.mjs && vite build && bun build server/index.ts --target=bun --outfile=dist/server.mjs && cp -L node_modules/@opencode/cli/bin/opencode.exe dist/opencode && chmod +x dist/opencode",
     "start": "NODE_ENV=production bun run server/index.ts",
     "typecheck": "tsc --noEmit",
     "gen:skill": "bun run scripts/gen-skill.ts",
