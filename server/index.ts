@@ -21,6 +21,7 @@
 
 import { Service } from "@opencode/client/service";
 import service from "../service.ts";
+import { spawnSync } from "node:child_process";
 import type { Server } from "bun";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, watch, appendFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -146,6 +147,20 @@ const DIST_DIR = fileURLToPath(new URL("../dist/", import.meta.url));
 const APP_ROOT = fileURLToPath(new URL("../", import.meta.url));
 // Make the packaged OpenCode CLI discoverable by Service.ensure().
 process.env.PATH = [DIST_DIR, process.env.PATH].filter(Boolean).join(delimiter);
+
+const OPENCODE_CLI_PATH = join(DIST_DIR, "opencode");
+try {
+  const cliProbe = spawnSync(OPENCODE_CLI_PATH, ["--version"], {
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  console.log(
+    `[webui] OpenCode CLI preflight: found=${existsSync(OPENCODE_CLI_PATH)} status=${cliProbe.status ?? "none"} signal=${cliProbe.signal ?? "none"} error=${cliProbe.error?.message ?? "none"} version=${(cliProbe.stdout ?? "").trim().slice(0, 120)} stderr=${(cliProbe.stderr ?? "").trim().slice(0, 240)}`,
+  );
+} catch (error) {
+  console.error("[webui] OpenCode CLI preflight threw:", error instanceof Error ? error.message : String(error));
+}
+
 // A repo checkout (vite.config.ts present) runs the two-port dev topology:
 // Vite serves the UI and proxies /api to this proxy. Settings that only make
 // sense for the one-port production topology are flagged in the API below.
