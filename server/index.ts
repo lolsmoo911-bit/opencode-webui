@@ -21,6 +21,7 @@
 
 import { Service } from "@opencode/client/service";
 import service from "../service.ts";
+import { x as extractTar } from "tar";
 import type { Server } from "bun";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, watch, appendFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -144,11 +145,12 @@ const BIND_HOST = HOST === "localhost" ? "127.0.0.1" : HOST;
 // path that scripts/embed-shim.ts maps onto the embedded assets.
 const DIST_DIR = fileURLToPath(new URL("../dist/", import.meta.url));
 const APP_ROOT = fileURLToPath(new URL("../", import.meta.url));
-// Download the platform-specific CLI on demand. Use two public npm mirrors,
-// stream directly to disk, and log progress before the network transfer starts.
+// Fetch the published Linux CLI package from the npm registry (the CDN mirrors
+// return HTTP errors in the Prisma runtime) and extract its binary from disk.
 const OPENCODE_RUNTIME_DIR = join(tmpdir(), "opencode-webui-runtime");
 const OPENCODE_CLI_PATH = join(OPENCODE_RUNTIME_DIR, "opencode");
 const OPENCODE_CLI_VERSION = "2.0.26";
+const OPENCODE_CLI_ARCHIVE = join(OPENCODE_RUNTIME_DIR, "opencode-cli.tgz");
 
 async function ensureOpenCodeCli(): Promise<void> {
   try {
@@ -156,40 +158,34 @@ async function ensureOpenCodeCli(): Promise<void> {
     const needsDownload =
       !existsSync(OPENCODE_CLI_PATH) || statSync(OPENCODE_CLI_PATH).size < 10_000_000;
     if (needsDownload) {
-      const urls = [
-        `https://unpkg.com/@opencode/cli-linux-x64@${OPENCODE_CLI_VERSION}/bin/opencode`,
-        `https://cdn.jsdelivr.net/npm/@opencode/cli-linux-x64@${OPENCODE_CLI_VERSION}/bin/opencode`,
-      ];
-      let downloaded = false;
-      for (const url of urls) {
-        try {
-          console.log(`[webui] downloading OpenCode CLI from ${new URL(url).hostname}`);
-          const response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
-          if (!response.ok || !response.body) {
-            throw new Error(`download returned HTTP ${response.status}`);
-          }
-          rmSync(OPENCODE_CLI_PATH, { force: true });
-          const bytesWritten = await Bun.write(OPENCODE_CLI_PATH, response.body);
-          if (bytesWritten < 10_000_000) {
-            rmSync(OPENCODE_CLI_PATH, { force: true });
-            throw new Error(`download was unexpectedly small (${bytesWritten} bytes)`);
-          }
-          chmodSync(OPENCODE_CLI_PATH, 0o700);
-          console.log(`[webui] OpenCode CLI download completed: ${bytesWritten} bytes`);
-          downloaded = true;
-          break;
-        } catch (error) {
-          console.error(
-            `[webui] OpenCode CLI download attempt failed (${new URL(url).hostname}): ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
+      const url = `https://registry.npmjs.org/@opencode/cli-linux-x64/-/cli-linux-x64-${OPENCODE_CLI_VERSION}.tgz`;
+      console.log("[webui] downloading OpenCode CLI from registry.npmjs.org");
+      const response = await fetch(url, { signal: AbortSignal.timeout(180_000) });
+      if (!response.ok || !response.body) {
+        throw new Error(`npm registry download returned HTTP ${response.status}`);
       }
-      if (!downloaded) throw new Error("all OpenCode CLI download mirrors failed");
+      rmSync(OPENCODE_CLI_ARCHIVE, { force: true });
+      const archiveBytes = await Bun.write(OPENCODE_CLI_ARCHIVE, response.body);
+      if (archiveBytes < 10_000_000) {
+        rmSync(OPENCODE_CLI_ARCHIVE, { force: true });
+        throw new Error(`CLI archive was unexpectedly small (${archiveBytes} bytes)`);
+      }
+      console.log(`[webui] OpenCode CLI archive downloaded: ${archiveBytes} bytes`);
+      await extractTar({
+        file: OPENCODE_CLI_ARCHIVE,
+        cwd: OPENCODE_RUNTIME_DIR,
+        strip: 2,
+        filter: (path: string) => path === "package/bin/opencode",
+      });
+      rmSync(OPENCODE_CLI_ARCHIVE, { force: true });
+      if (!existsSync(OPENCODE_CLI_PATH) || statSync(OPENCODE_CLI_PATH).size < 10_000_000) {
+        throw new Error("the npm package did not produce a valid opencode binary");
+      }
+      chmodSync(OPENCODE_CLI_PATH, 0o700);
+      console.log(`[webui] OpenCode CLI extracted: ${statSync(OPENCODE_CLI_PATH).size} bytes`);
     }
     process.env.PATH = [OPENCODE_RUNTIME_DIR, process.env.PATH].filter(Boolean).join(delimiter);
-    console.log(
-      `[webui] OpenCode CLI ready: exists=${existsSync(OPENCODE_CLI_PATH)} bytes=${statSync(OPENCODE_CLI_PATH).size}`,
-    );
+    console.log(`[webui] OpenCode CLI ready: exists=${existsSync(OPENCODE_CLI_PATH)} bytes=${statSync(OPENCODE_CLI_PATH).size}`);
   } catch (error) {
     console.error("[webui] OpenCode CLI setup failed:", error instanceof Error ? error.message : String(error));
   }

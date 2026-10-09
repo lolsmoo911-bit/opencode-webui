@@ -77,7 +77,8 @@
     "@prisma/composer": "latest",
     "@prisma/composer-prisma-cloud": "latest",
     "arktype": "latest",
-    "prisma": "latest"
+    "prisma": "latest",
+    "tar": "^7.4.3"
   },
   "trustedDependencies": [
     "@tailwindcss/oxide"
