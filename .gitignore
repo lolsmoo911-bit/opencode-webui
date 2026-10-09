@@ -10,4 +10,3 @@ scripts/generated/
 # a /tmp fixture has no node_modules above it), so they must be ignored here.
 .uitest-*/
 # Generated from the platform-specific OpenCode executable during CI builds
-server/opencode-cli.b64
