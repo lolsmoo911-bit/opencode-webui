@@ -25,5 +25,5 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: prisma/cloud-deploy-action@v1
         with:
-          install-command: bun install
+          install-command: bun install && bun pm trust @opencode/cli
           build-command: bun run build
