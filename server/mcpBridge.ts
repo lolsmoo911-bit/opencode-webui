@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { verifyMcpAccessToken } from "./mcpOAuth";
 
 type EngineRequest = (path: string, init?: RequestInit) => Promise<Response>;
 type BridgeOptions = { token?: string; requestEngine: EngineRequest };
@@ -188,8 +189,23 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
  * can cause the connected OpenCode agent to change project files.
  */
 export async function handleMcpBridge(req: Request, options: BridgeOptions): Promise<Response> {
-  if (!tokenIsValid(options.token ?? process.env.WEBUI_MCP_TOKEN, req.headers.get("authorization"))) {
-    return jsonResponse({ error: "MCP bridge is disabled or authentication failed." }, 401);
+  const secret = options.token ?? process.env.WEBUI_MCP_TOKEN;
+  const header = req.headers.get("authorization");
+  const bearer = /^Bearer\\s+(.+)$/i.exec(header ?? "")?.[1]?.trim() ?? "";
+  const staticToken = tokenIsValid(secret, header);
+  const origin = new URL(req.url).origin;
+  const oauthAccess = !staticToken
+    ? verifyMcpAccessToken(bearer, secret, origin + "/mcp")
+    : null;
+  if (!staticToken && !oauthAccess) {
+    return new Response(JSON.stringify({ error: "MCP authorization is required." }), {
+      status: 401,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="opencode:read opencode:write"`,
+      },
+    });
   }
   if (req.method !== "POST") {
     return new Response("Method Not Allowed", {
@@ -250,6 +266,13 @@ export async function handleMcpBridge(req: Request, options: BridgeOptions): Pro
       case "tools/call": {
         const name = typeof params.name === "string" ? params.name : "";
         try {
+          if (oauthAccess) {
+            const writeTools = new Set(["create_session", "send_message"]);
+            const requiredScope = writeTools.has(name) ? "opencode:write" : "opencode:read";
+            if (!oauthAccess.scopes.includes(requiredScope)) {
+              throw new Error("The connected account has not granted the required permission: " + requiredScope);
+            }
+          }
           const result = await callTool(name, params.arguments, options.requestEngine);
           return jsonResponse({
             jsonrpc: "2.0",
