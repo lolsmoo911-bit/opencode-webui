@@ -375,7 +375,7 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
         probeHealth(),
       ]);
       return {
-        allEndpointsResponded: checks.every(check => check.ok && check.json),
+        allEndpointsResponded: checks.every(check => check.ok), // Health endpoints may return plain text with HTTP 200.
         checks,
       };
     }
