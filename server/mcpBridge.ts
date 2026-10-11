@@ -147,10 +147,10 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
   const args = record(rawArgs);
   switch (name) {
     case "opencode_health": {
-      // OpenCode documents /global/health as the primary health endpoint.
-      // A few packaged/runtime versions expose /api/health instead, so only
-      // try read-only GET probes and reject HTML SPA fallbacks as non-health.
-      const candidates = ["/global/health", "/api/health", "/api/global/health"];
+      // The bundled OpenCode 2.x CLI also exposes /api/info with server
+      // identity and readiness. Prefer it, then fall back to the documented
+      // legacy health endpoint. Never mistake the WebUI SPA HTML for health.
+      const candidates = ["/api/info", "/global/health", "/api/health", "/api/global/health"];
       const attempts: string[] = [];
       for (const path of candidates) {
         const response = await requestEngine(path, { headers: { accept: "application/json" } });
@@ -158,14 +158,18 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
         const text = await response.text();
         let value: unknown;
         try { value = text ? JSON.parse(text) : null; } catch { value = null; }
-        if (response.ok && value && typeof value === "object" &&
-            (value as Record<string, unknown>).healthy === true) {
-          return { endpoint: path, ...value as Record<string, unknown> };
+        const info = value && typeof value === "object" ? value as Record<string, unknown> : null;
+        const hasHealth = info?.healthy === true;
+        const hasServerInfo = path === "/api/info" && info !== null &&
+          (typeof info.version === "string" || typeof info.ready === "boolean" ||
+           typeof info.status === "string" || typeof info.server === "object");
+        if (response.ok && info && (hasHealth || hasServerInfo)) {
+          return { endpoint: path, healthConfirmed: hasHealth, ...info };
         }
         attempts.push(path + " -> HTTP " + response.status + " (" + (contentType || "no content-type") +
           (text && !value ? ", non-JSON body: " + text.slice(0, 100).replace(/\\s+/g, " ") : "") + ")");
       }
-      throw new Error("No valid OpenCode health JSON response. " + attempts.join("; "));
+      throw new Error("No valid OpenCode JSON health/info response. " + attempts.join("; "));
     }
     case "list_sessions":
       return engineJson(requestEngine, "/session");
