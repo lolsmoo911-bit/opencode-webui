@@ -22,6 +22,12 @@ const requestEngine = async (path: string, init?: RequestInit): Promise<Response
   if (path === "/api/health" && method === "GET") return json({ healthy: true });
   if (path === "/api/session?limit=1" && method === "GET") return json({ data: [] });
   if (path === "/api/session" && method === "GET") return json({ data: [] });
+  if (path === "/api/agent" && method === "GET") return json({ data: [{ name: "build" }] });
+  if (path === "/api/model" && method === "GET") return json({ data: [{ id: "test-model" }] });
+  if (path === "/api/command" && method === "GET") return json({ data: [{ name: "init" }] });
+  if (path === "/api/fs/find?query=README&type=file&limit=50" && method === "GET") {
+    return json({ data: [{ path: "README.md", type: "file" }] });
+  }
   if (path === "/api/session" && method === "POST") {
     const input = JSON.parse(body ?? "{}") as { title?: string };
     return json({ data: { id: "sess-test", title: input.title ?? "" } });
@@ -104,6 +110,18 @@ async function main() {
   const sessionDiff = await tool("get_session_diff", { session_id: "sess-test" });
   assert.equal(sessionDiff.data[0].file, "README.md");
 
+  const agents = await tool("list_agents");
+  assert.equal(agents.data[0].name, "build");
+
+  const models = await tool("list_models");
+  assert.equal(models.data[0].id, "test-model");
+
+  const commands = await tool("list_commands");
+  assert.equal(commands.data[0].name, "init");
+
+  const found = await tool("find_files", { query: "README", type: "file" });
+  assert.equal(found.data[0].path, "README.md");
+
   const files = await tool("list_files", { path: "src" });
   assert.equal(files.data[0].path, "src/index.ts");
 
@@ -138,7 +156,7 @@ async function main() {
     else process.env.WEBUI_MCP_ALLOW_NO_AUTH = previous;
   }
 
-  console.log("MCP bridge checks passed: diagnostics, protected session/file helpers, prompt/wait/reply and restricted no-auth mode.");
+  console.log("MCP bridge checks passed: diagnostic helpers, protected sessions/files, agents/models/commands/search and prompt/wait/reply.");
 }
 
 await main();
