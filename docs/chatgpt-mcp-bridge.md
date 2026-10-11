@@ -15,7 +15,7 @@ It gives an MCP client controlled access to the OpenCode engine attached to this
 - Transport: Streamable HTTP using JSON-RPC, with `Content-Type: application/json`.
 - Authentication: `Authorization: Bearer <WEBUI_MCP_TOKEN>`.
 
-The bridge supports `initialize`, `ping`, `tools/list`, and `tools/call`. Its tools cover engine health, sessions, session messages, file listing/reading, and sending a prompt to OpenCode.
+The bridge supports `initialize`, `ping`, `tools/list`, and `tools/call`. Its tools cover engine health, sessions, session messages, file listing/reading, and sending a prompt to OpenCode. The OAuth server supports authorization-code + PKCE and refresh-token exchange (`offline_access`), with one-hour access tokens and 30-day refresh tokens.
 
 **Safety:** `send_message` can cause OpenCode to modify project files. Connect only trusted MCP clients and review the result before deploying code. Do not disable bearer-token authentication to troubleshoot the bridge.
 
