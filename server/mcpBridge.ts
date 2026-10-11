@@ -191,7 +191,7 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
 export async function handleMcpBridge(req: Request, options: BridgeOptions): Promise<Response> {
   const secret = options.token ?? process.env.WEBUI_MCP_TOKEN;
   const header = req.headers.get("authorization");
-  const bearer = /^Bearer\\s+(.+)$/i.exec(header ?? "")?.[1]?.trim() ?? "";
+  const bearer = /^Bearer\s+(.+)$/i.exec(header ?? "")?.[1]?.trim() ?? "";
   const staticToken = tokenIsValid(secret, header);
   const origin = new URL(req.url).origin;
   const oauthAccess = !staticToken
