@@ -30,4 +30,4 @@ jobs:
       - uses: prisma/cloud-deploy-action@v1
         with:
           install-command: bun install
-          build-command: bun run build
+          build-command: bun run typecheck && bun run build
