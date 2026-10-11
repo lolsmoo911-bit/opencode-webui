@@ -185,14 +185,14 @@ export async function handleMcpOAuthRequest(req: Request, configuredSecret?: str
       return oauthError("invalid_client_metadata", "Only the code response type is supported.");
     }
     const clientName = typeof body.client_name === "string" ? body.client_name.slice(0, 100) : "ChatGPT MCP client";
-    // Registration data is signed into the client ID so server restarts do not lose it.\n    const payload = {
+    // Registration data is signed into the client ID so server restarts do not lose it.
+    const payload = {
       client_id: "chatgpt-" + randomBytes(18).toString("hex"),
       redirect_uris: redirects,
       client_name: clientName,
       exp: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60,
     };
     const signedClientId = sign(secret, "client", payload);
-    void clientId; // the signed ID is the only returned ID; no client secret is issued.
     return json({
       client_id: signedClientId,
       client_name: clientName,
