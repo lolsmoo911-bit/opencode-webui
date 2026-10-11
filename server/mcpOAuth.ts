@@ -93,6 +93,20 @@ function parseClientId(clientId: string, secret: string): RegisteredClient | nul
   }
   return null;
 }
+export function publicMcpOrigin(req: Request): string {
+  const requestUrl = new URL(req.url);
+  const forwardedHost = req.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = forwardedHost || req.headers.get("host")?.split(",")[0]?.trim() || requestUrl.host;
+  const forwardedProto = req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  const protocol = forwardedProto === "https" || forwardedProto === "http"
+    ? forwardedProto
+    : requestUrl.protocol.replace(/:$/, "");
+  try {
+    return new URL(protocol + "://" + host).origin;
+  } catch {
+    return requestUrl.origin;
+  }
+}
 function expectedResource(origin: string): string {
   return origin.replace(/\/$/, "") + "/mcp";
 }
