@@ -192,8 +192,13 @@ export async function handleMcpOAuthRequest(req: Request, configuredSecret?: str
       return oauthError("invalid_redirect_uri", "Only approved HTTPS ChatGPT callback URLs are allowed.");
     }
     const grants = body.grant_types;
-    if (grants !== undefined && (!Array.isArray(grants) || !grants.every(x => x === "authorization_code"))) {
-      return oauthError("invalid_client_metadata", "Only the authorization_code grant is supported.");
+    const supportedGrantTypes = new Set(["authorization_code", "refresh_token"]);
+    if (grants !== undefined && (
+      !Array.isArray(grants) ||
+      !grants.includes("authorization_code") ||
+      !grants.every(x => typeof x === "string" && supportedGrantTypes.has(x))
+    )) {
+      return oauthError("invalid_client_metadata", "Supported grants are authorization_code and refresh_token.");
     }
     const responseTypes = body.response_types;
     if (responseTypes !== undefined && (!Array.isArray(responseTypes) || !responseTypes.every(x => x === "code"))) {
@@ -212,7 +217,7 @@ export async function handleMcpOAuthRequest(req: Request, configuredSecret?: str
       client_id: signedClientId,
       client_name: clientName,
       redirect_uris: redirects,
-      grant_types: ["authorization_code"],
+      grant_types: Array.isArray(grants) ? [...new Set(grants as string[])] : ["authorization_code"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
     }, 201);
