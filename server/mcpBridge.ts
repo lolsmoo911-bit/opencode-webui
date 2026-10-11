@@ -147,35 +147,51 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
   const args = record(rawArgs);
   switch (name) {
     case "opencode_health": {
-      // The bundled OpenCode 2.x CLI also exposes /api/info with server
-      // identity and readiness. Prefer it, then fall back to the documented
-      // legacy health endpoint. Never mistake the WebUI SPA HTML for health.
-      const candidates = ["/api/info", "/global/health", "/api/health", "/api/global/health"];
-      const attempts: string[] = [];
-      for (const path of candidates) {
-        const response = await requestEngine(path, { headers: { accept: "application/json" } });
-        const contentType = response.headers.get("content-type") ?? "";
-        const text = await response.text();
-        let value: unknown;
-        try { value = text ? JSON.parse(text) : null; } catch { value = null; }
-        const info = value && typeof value === "object" ? value as Record<string, unknown> : null;
-        const hasHealth = info?.healthy === true;
-        const hasServerInfo = path === "/api/info" && info !== null &&
-          (typeof info.version === "string" || typeof info.ready === "boolean" ||
-           typeof info.status === "string" || typeof info.server === "object");
-        if (response.ok && info && (hasHealth || hasServerInfo)) {
-          return { endpoint: path, healthConfirmed: hasHealth, ...info };
-        }
-        attempts.push(path + " -> HTTP " + response.status + " (" + (contentType || "no content-type") +
-          (text && !value ? ", non-JSON body: " + text.slice(0, 100).replace(/\\s+/g, " ") : "") + ")");
+      // OpenCode v2 exposes its server identity/readiness at /api/info.
+      // Also probe a bounded read-only session-list request so this diagnostic
+      // verifies the session API, without returning any session titles/content.
+      const response = await requestEngine("/api/info", { headers: { accept: "application/json" } });
+      const contentType = response.headers.get("content-type") ?? "";
+      const text = await response.text();
+      let value: unknown;
+      try { value = text ? JSON.parse(text) : null; } catch { value = null; }
+      const info = value && typeof value === "object" ? value as Record<string, unknown> : null;
+      if (!response.ok || !info || typeof info.version !== "string") {
+        throw new Error("OpenCode /api/info failed: HTTP " + response.status + " (" +
+          (contentType || "no content-type") + (text && !info ? ", non-JSON body: " + text.slice(0, 120).replace(/\\s+/g, " ") : "") + ")");
       }
-      throw new Error("No valid OpenCode JSON health/info response. " + attempts.join("; "));
+      const sessionsResponse = await requestEngine("/api/session?limit=1", {
+        headers: { accept: "application/json" },
+      });
+      const sessionsText = await sessionsResponse.text();
+      let sessionsValue: unknown;
+      try { sessionsValue = sessionsText ? JSON.parse(sessionsText) : null; } catch { sessionsValue = null; }
+      const sessionsValid = sessionsResponse.ok && (Array.isArray(sessionsValue) ||
+        (sessionsValue !== null && typeof sessionsValue === "object" &&
+         ("data" in (sessionsValue as Record<string, unknown>) || "items" in (sessionsValue as Record<string, unknown>))));
+      if (!sessionsValid) {
+        throw new Error("OpenCode /api/info responded (version " + info.version +
+          "), but /api/session probe failed: HTTP " + sessionsResponse.status +
+          ". Check service authorization and the active project.");
+      }
+      const readiness = typeof info.ready === "boolean" ? info.ready :
+        typeof info.healthy === "boolean" ? info.healthy : null;
+      return {
+        endpoint: "/api/info",
+        apiReachable: true,
+        healthConfirmed: readiness === true,
+        readiness,
+        version: info.version,
+        pid: typeof info.pid === "number" ? info.pid : null,
+        sessionApi: "ok",
+        sessionCountReturned: Array.isArray(sessionsValue) ? sessionsValue.length : null,
+      };
     }
     case "list_sessions":
-      return engineJson(requestEngine, "/session");
+      return engineJson(requestEngine, "/api/session");
     case "create_session": {
       const title = typeof args.title === "string" ? args.title.trim() : "";
-      return engineJson(requestEngine, "/session", jsonBody(title ? { title } : {}));
+      return engineJson(requestEngine, "/api/session", jsonBody(title ? { title } : {}));
     }
     case "get_session_messages": {
       const sessionId = encodeURIComponent(stringArg(args, "session_id"));
@@ -183,22 +199,22 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
       const limit = typeof requestedLimit === "number" && Number.isInteger(requestedLimit)
         ? Math.min(100, Math.max(1, requestedLimit))
         : 50;
-      return engineJson(requestEngine, "/session/" + sessionId + "/message?limit=" + limit);
+      return engineJson(requestEngine, "/api/session/" + sessionId + "/message?limit=" + limit);
     }
     case "send_message": {
       const sessionId = encodeURIComponent(stringArg(args, "session_id"));
       const message = stringArg(args, "message");
-      return engineJson(requestEngine, "/session/" + sessionId + "/message", jsonBody({
+      return engineJson(requestEngine, "/api/session/" + sessionId + "/message", jsonBody({
         parts: [{ type: "text", text: message }],
       }));
     }
     case "list_files": {
       const path = typeof args.path === "string" ? args.path : ".";
-      return engineJson(requestEngine, "/file?path=" + encodeURIComponent(path));
+      return engineJson(requestEngine, "/api/file?path=" + encodeURIComponent(path));
     }
     case "read_file": {
       const path = stringArg(args, "path");
-      return engineJson(requestEngine, "/file/content?path=" + encodeURIComponent(path));
+      return engineJson(requestEngine, "/api/file/content?path=" + encodeURIComponent(path));
     }
     default:
       throw new Error("Unknown tool: " + name);
