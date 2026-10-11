@@ -21,6 +21,7 @@
 
 import { Service } from "@opencode/client/service";
 import { handleMcpBridge } from "./mcpBridge";
+import { handleMcpOAuthRequest } from "./mcpOAuth";
 import service from "../service.ts";
 import { x as extractTar } from "tar";
 import { PRISMA_ASSETS } from "./prisma-assets";
@@ -1369,10 +1370,17 @@ const server: Server<Record<string, unknown>> = Bun.serve({
     const guarded = guardRequest(req, HOST, ALLOWED_HOSTS, CONFIG.trustProxy);
     if (guarded) return guarded;
 
-    // Remote MCP bridge: bearer-token auth is independent of browser cookies.
-    // It stays disabled until WEBUI_MCP_TOKEN is configured as a project secret.
+    // OAuth discovery and authorization endpoints for ChatGPT's remote MCP client.
+    // Authorization is backed by the private WEBUI_MCP_TOKEN but only short-lived,
+    // resource-bound OAuth access tokens are sent to ChatGPT after consent.
+    const mcpOAuthResponse = await handleMcpOAuthRequest(req, process.env.WEBUI_MCP_TOKEN);
+    if (mcpOAuthResponse) return mcpOAuthResponse;
+
+    // MCP bridge: independent of browser-cookie login; accepts the direct token
+    // for trusted non-browser MCP clients and scoped OAuth tokens for ChatGPT.
     if (path === "/mcp") {
       return handleMcpBridge(req, {
+        token: process.env.WEBUI_MCP_TOKEN,
         requestEngine: async (enginePath, init = {}) => {
           const ep = await serviceEndpoint();
           const headers = new Headers(Service.headers(ep));
