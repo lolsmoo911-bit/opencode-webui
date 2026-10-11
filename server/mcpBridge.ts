@@ -197,7 +197,11 @@ export async function handleMcpBridge(req: Request, options: BridgeOptions): Pro
   const oauthAccess = !staticToken
     ? verifyMcpAccessToken(bearer, secret, origin + "/mcp")
     : null;
-  if (!staticToken && !oauthAccess) {
+  // Temporary Preview-only diagnostic mode. Without an Authorization header,
+  // expose only the non-sensitive health check; all project/session reads and
+  // every write-capable tool remain authenticated.
+  const publicHealthOnly = process.env.WEBUI_MCP_ALLOW_NO_AUTH === "1" && !header;
+  if (!staticToken && !oauthAccess && !publicHealthOnly) {
     return new Response(JSON.stringify({ error: "MCP authorization is required." }), {
       status: 401,
       headers: {
@@ -262,10 +266,17 @@ export async function handleMcpBridge(req: Request, options: BridgeOptions): Pro
       case "ping":
         return jsonResponse({ jsonrpc: "2.0", id, result: {} }, 200, responseProtocolVersion);
       case "tools/list":
-        return jsonResponse({ jsonrpc: "2.0", id, result: { tools: TOOLS } }, 200, responseProtocolVersion);
+        return jsonResponse({
+          jsonrpc: "2.0",
+          id,
+          result: { tools: publicHealthOnly ? TOOLS.filter(tool => tool.name === "opencode_health") : TOOLS },
+        }, 200, responseProtocolVersion);
       case "tools/call": {
         const name = typeof params.name === "string" ? params.name : "";
         try {
+          if (publicHealthOnly && name !== "opencode_health") {
+            throw new Error("Unauthenticated test mode permits only opencode_health. Configure OAuth to access sessions and files or send tasks.");
+          }
           if (oauthAccess) {
             const writeTools = new Set(["create_session", "send_message"]);
             const requiredScope = writeTools.has(name) ? "opencode:write" : "opencode:read";
