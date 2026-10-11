@@ -208,7 +208,6 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
         apiReachable: true,
         healthEndpoint: "/api/health",
         healthStatus: healthResponse.status,
-        apiReachable: true,
         healthConfirmed: healthResponse.ok && readiness === true,
         readiness,
         version: info.version,
