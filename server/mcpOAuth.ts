@@ -159,6 +159,7 @@ export async function handleMcpOAuthRequest(req: Request, configuredSecret?: str
       response_modes_supported: ["query"],
       grant_types_supported: ["authorization_code", "refresh_token"],
       token_endpoint_auth_methods_supported: ["none"],
+      client_id_metadata_document_supported: true,
       code_challenge_methods_supported: ["S256"],
       scopes_supported: [...ALLOWED_SCOPES],
       authorization_response_iss_parameter_supported: true,
