@@ -115,10 +115,10 @@ function issueAccessToken(secret: string, payload: AccessPayload): string {
 }
 
 /** Validate a Bearer token for the MCP endpoint; returns OAuth scopes for OAuth-issued tokens. */
-export function verifyMcpAccessToken(token: string, secret: string | undefined): { scopes: string[] } | null {
+export function verifyMcpAccessToken(token: string, secret: string | undefined, resource: string): { scopes: string[] } | null {
   if (!secret || secret.length < 32) return null;
   const payload = verify(secret, token, "access");
-  if (!payload || payload.resource !== undefined && typeof payload.resource !== "string") return null;
+  if (!payload || payload.resource !== resource) return null;
   const scope = typeof payload.scope === "string" ? payload.scope : "";
   return { scopes: scope.split(/\s+/).filter(Boolean) };
 }
