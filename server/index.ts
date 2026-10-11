@@ -20,6 +20,7 @@
  */
 
 import { Service } from "@opencode/client/service";
+import { handleMcpBridge } from "./mcpBridge";
 import service from "../service.ts";
 import { x as extractTar } from "tar";
 import { PRISMA_ASSETS } from "./prisma-assets";
@@ -1367,6 +1368,20 @@ const server: Server<Record<string, unknown>> = Bun.serve({
     // DNS-rebinding + cross-origin guard — before ANY route, login included.
     const guarded = guardRequest(req, HOST, ALLOWED_HOSTS, CONFIG.trustProxy);
     if (guarded) return guarded;
+
+    // Remote MCP bridge: bearer-token auth is independent of browser cookies.
+    // It stays disabled until WEBUI_MCP_TOKEN is configured as a project secret.
+    if (path === "/mcp") {
+      return handleMcpBridge(req, {
+        requestEngine: async (enginePath, init = {}) => {
+          const ep = await serviceEndpoint();
+          const headers = new Headers(Service.headers(ep));
+          new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+          headers.set("accept-encoding", "identity");
+          return fetch(ep.url + enginePath, { ...init, headers });
+        },
+      });
+    }
 
     // The unauthenticated surface: login page, login POST, logout.
     if (method === "GET" && path === "/login") return loginPageResponse(url);
