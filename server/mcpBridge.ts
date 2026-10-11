@@ -235,9 +235,46 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
     case "send_message": {
       const sessionId = encodeURIComponent(stringArg(args, "session_id"));
       const message = stringArg(args, "message");
-      return engineJson(requestEngine, "/api/session/" + sessionId + "/message", jsonBody({
-        parts: [{ type: "text", text: message }],
+
+      // OpenCode v2 accepts prompts at /prompt and returns 204 after admitting
+      // the input. Wait for the agent loop, then return the newest transcript
+      // entries so the MCP caller receives the actual answer rather than null.
+      await engineJson(requestEngine, "/api/session/" + sessionId + "/prompt", jsonBody({
+        id: null,
+        prompt: { text: message },
       }));
+      await engineJson(requestEngine, "/api/experimental/session/" + sessionId + "/wait", {
+        method: "POST",
+      });
+      const transcript = await engineJson(
+        requestEngine,
+        "/api/session/" + sessionId + "/message?limit=10&order=desc",
+      );
+      const envelope = record(transcript);
+      const messages = Array.isArray(transcript) ? transcript :
+        Array.isArray(envelope.data) ? envelope.data : [];
+      const assistant = messages.find((item) => {
+        const row = record(item);
+        const info = record(row.info);
+        return row.type === "assistant" || info.role === "assistant" || info.type === "assistant";
+      });
+      const assistantRow = record(assistant);
+      const assistantInfo = record(assistantRow.info);
+      const content = Array.isArray(assistantRow.content) ? assistantRow.content :
+        Array.isArray(assistantInfo.content) ? assistantInfo.content : [];
+      const textParts = content
+        .filter((part) => record(part).type === "text" && typeof record(part).text === "string")
+        .map((part) => String(record(part).text));
+      const legacyParts = Array.isArray(assistantRow.parts) ? assistantRow.parts :
+        Array.isArray(assistantInfo.parts) ? assistantInfo.parts : [];
+      const legacyText = legacyParts
+        .filter((part) => typeof record(part).text === "string")
+        .map((part) => String(record(part).text));
+      return {
+        session_id: decodeURIComponent(sessionId),
+        assistant_response: textParts.join("\\n") || legacyText.join("\\n") || null,
+        messages,
+      };
     }
     case "list_files": {
       const path = typeof args.path === "string" ? args.path : ".";
