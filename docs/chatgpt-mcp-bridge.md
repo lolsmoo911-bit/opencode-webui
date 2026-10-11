@@ -1,34 +1,24 @@
 # OpenCode MCP bridge
 
-This repository can expose a stateless, Streamable HTTP MCP endpoint at /mcp.
-It gives an MCP client controlled access to the OpenCode engine attached to this
-WebUI instance.
+This repository exposes a stateless Streamable HTTP MCP endpoint at `/mcp`.
+It gives an MCP client controlled access to the OpenCode engine attached to this WebUI instance.
 
-## Safety and enablement
+## Enable the bridge
 
-The endpoint remains unusable until the Prisma Compute project has an
-environment variable named WEBUI_MCP_TOKEN with a random secret of at least 32
-characters. Send it as Authorization: Bearer <token>. Do not reuse the WebUI
-login password. Keep the token private and rotate it immediately if exposed.
+1. In Prisma Console, set `WEBUI_MCP_TOKEN` as an encrypted **Preview** environment variable, or as a branch override for `feature/chatgpt-mcp-bridge`.
+2. Use a unique random secret with at least 32 characters. Never commit the token, share it in chat, or reuse the WebUI login password.
+3. Redeploy the preview branch after changing this variable. Prisma resolves environment variables when a deployment is created; saving a value does not update an already-running deployment.
 
-The bridge is intentionally narrow: health, session listing/creation, message
-history, file listing/reading, and sending a prompt to OpenCode. Sending a
-prompt can lead OpenCode to modify files, so only connect trusted MCP clients.
+## Connect an MCP client
 
-## Supported MCP methods
+- Endpoint: `https://xpw8e5kpd150o4ifttv9gp7r.ewr.prisma.build/mcp` (preview only; use the current preview URL if it changes).
+- Transport: Streamable HTTP using JSON-RPC, with `Content-Type: application/json`.
+- Authentication: `Authorization: Bearer <WEBUI_MCP_TOKEN>`.
 
-- initialize
-- ping
-- tools/list
-- tools/call
+The bridge supports `initialize`, `ping`, `tools/list`, and `tools/call`. Its tools cover engine health, sessions, session messages, file listing/reading, and sending a prompt to OpenCode.
 
-## ChatGPT plan note
+**Safety:** `send_message` can cause OpenCode to modify project files. Connect only trusted MCP clients and review the result before deploying code. Do not disable bearer-token authentication to troubleshoot the bridge.
 
-A remote MCP endpoint is not automatically connectable from every ChatGPT plan.
-Check custom-app/MCP availability for the account before relying on it as a
-ChatGPT tool. The same endpoint can be tested from other MCP clients that
-support Streamable HTTP and bearer-token authentication.
+## Smoke test
 
-## Preview validation
-
-The isolated feature-branch workflow runs TypeScript typechecking before the production bundle build. The live production branch is not changed by this preview workflow.
+After redeployment, configure an MCP client that supports remote Streamable HTTP and bearer-token authentication. Call `tools/list`, then `opencode_health`. ChatGPT's ability to connect depends on whether custom remote MCP apps are available for your account; the endpoint alone does not enable that feature on every plan.
