@@ -35,6 +35,15 @@ const requestEngine = async (path: string, init?: RequestInit): Promise<Response
   if (path === "/api/fs/read/README.md" && method === "GET") {
     return new Response("# fixture file", { status: 200, headers: { "content-type": "text/plain" } });
   }
+  if (path === "/api/session/sess-test" && method === "GET") {
+    return json({ data: { id: "sess-test", title: "bridge-test", status: "idle" } });
+  }
+  if (path === "/api/session/sess-test/context" && method === "GET") {
+    return json({ data: [{ id: "msg-context", role: "assistant", parts: [{ type: "text", text: "context" }] }] });
+  }
+  if (path === "/api/session/sess-test/diff" && method === "GET") {
+    return json({ data: [{ file: "README.md", additions: 1, deletions: 0 }] });
+  }
   if (path === "/api/session/sess-test/message?limit=3" && method === "GET") {
     return json({ data: [{ id: "msg-user", type: "user", text: "hello" }] });
   }
@@ -86,6 +95,15 @@ async function main() {
   const messages = await tool("get_session_messages", { session_id: "sess-test", limit: 3 });
   assert.equal(messages.data[0].id, "msg-user");
 
+  const sessionStatus = await tool("get_session_status", { session_id: "sess-test" });
+  assert.equal(sessionStatus.data.id, "sess-test");
+
+  const sessionContext = await tool("get_session_context", { session_id: "sess-test" });
+  assert.equal(sessionContext.data[0].id, "msg-context");
+
+  const sessionDiff = await tool("get_session_diff", { session_id: "sess-test" });
+  assert.equal(sessionDiff.data[0].file, "README.md");
+
   const files = await tool("list_files", { path: "src" });
   assert.equal(files.data[0].path, "src/index.ts");
 
@@ -100,8 +118,19 @@ async function main() {
   const previous = process.env.WEBUI_MCP_ALLOW_NO_AUTH;
   process.env.WEBUI_MCP_ALLOW_NO_AUTH = "1";
   try {
-    const listed = await rpc("tools/list", {});
-    assert.deepEqual(listed.body.result.tools.map((entry: { name: string }) => entry.name), ["opencode_health"]);
+    const listed = await rpc("tools/list", {}, false);
+    assert.deepEqual(
+      listed.body.result.tools.map((entry: { name: string }) => entry.name).sort(),
+      ["opencode_api_diagnostics", "opencode_bridge_capabilities", "opencode_health", "opencode_server_info"].sort(),
+    );
+    const serverInfo = await tool("opencode_server_info", {}, false);
+    assert.equal(serverInfo.version, "2.0.26");
+    const diagnostics = await tool("opencode_api_diagnostics", {}, false);
+    assert.equal(diagnostics.allEndpointsResponded, true);
+    assert.equal(diagnostics.checks.find((entry: { name: string }) => entry.name === "filesystem").itemCount, 1);
+    const catalog = await tool("opencode_bridge_capabilities", {}, false);
+    assert.equal(catalog.mode, "restricted-diagnostic");
+    assert.equal(catalog.protectedTools.includes("send_message"), true);
     const blocked = await rpc("tools/call", { name: "send_message", arguments: { session_id: "sess-test", message: "no" } }, false);
     assert.equal(blocked.body.result.isError, true);
   } finally {
@@ -109,7 +138,7 @@ async function main() {
     else process.env.WEBUI_MCP_ALLOW_NO_AUTH = previous;
   }
 
-  console.log("MCP bridge checks passed: sessions, messages, filesystem, prompt/wait/reply and unauthenticated restrictions.");
+  console.log("MCP bridge checks passed: diagnostics, protected session/file helpers, prompt/wait/reply and restricted no-auth mode.");
 }
 
 await main();
