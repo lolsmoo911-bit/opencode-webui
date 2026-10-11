@@ -166,14 +166,30 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
       const sessionsText = await sessionsResponse.text();
       let sessionsValue: unknown;
       try { sessionsValue = sessionsText ? JSON.parse(sessionsText) : null; } catch { sessionsValue = null; }
-      const sessionsValid = sessionsResponse.ok && (Array.isArray(sessionsValue) ||
-        (sessionsValue !== null && typeof sessionsValue === "object" &&
-         ("data" in (sessionsValue as Record<string, unknown>) || "items" in (sessionsValue as Record<string, unknown>))));
+      const sessionPayload = sessionsValue !== null && typeof sessionsValue === "object"
+        ? sessionsValue as Record<string, unknown> : null;
+      const sessionRows = Array.isArray(sessionsValue) ? sessionsValue :
+        Array.isArray(sessionPayload?.data) ? sessionPayload.data :
+        Array.isArray(sessionPayload?.items) ? sessionPayload.items : null;
+      const sessionsValid = sessionsResponse.ok && sessionRows !== null;
       if (!sessionsValid) {
         throw new Error("OpenCode /api/info responded (version " + info.version +
           "), but /api/session probe failed: HTTP " + sessionsResponse.status +
           ". Check service authorization and the active project.");
       }
+      // Validate the read-only filesystem listing endpoint without exposing any
+      // filenames or project contents in the public diagnostic response.
+      const filesResponse = await requestEngine("/api/fs/list?path=.", {
+        headers: { accept: "application/json" },
+      });
+      const filesText = await filesResponse.text();
+      let filesValue: unknown;
+      try { filesValue = filesText ? JSON.parse(filesText) : null; } catch { filesValue = null; }
+      const filesPayload = filesValue !== null && typeof filesValue === "object"
+        ? filesValue as Record<string, unknown> : null;
+      const fileRows = Array.isArray(filesPayload?.data) ? filesPayload.data :
+        Array.isArray(filesValue) ? filesValue : null;
+      const filesValid = filesResponse.ok && fileRows !== null;
       const readiness = typeof info.ready === "boolean" ? info.ready :
         typeof info.healthy === "boolean" ? info.healthy : null;
       return {
@@ -184,7 +200,10 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
         version: info.version,
         pid: typeof info.pid === "number" ? info.pid : null,
         sessionApi: "ok",
-        sessionCountReturned: Array.isArray(sessionsValue) ? sessionsValue.length : null,
+        sessionCountReturned: sessionRows.length,
+        filesystemApi: filesValid ? "ok" : "failed",
+        fileEntryCountReturned: filesValid ? fileRows.length : null,
+        filesystemStatus: filesValid ? filesResponse.status : filesResponse.status,
       };
     }
     case "list_sessions":
@@ -210,11 +229,11 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
     }
     case "list_files": {
       const path = typeof args.path === "string" ? args.path : ".";
-      return engineJson(requestEngine, "/api/file?path=" + encodeURIComponent(path));
+      return engineJson(requestEngine, "/api/fs/list?path=" + encodeURIComponent(path));
     }
     case "read_file": {
       const path = stringArg(args, "path");
-      return engineJson(requestEngine, "/api/file/content?path=" + encodeURIComponent(path));
+      return engineJson(requestEngine, "/api/fs/read/" + path.split("/").map(encodeURIComponent).join("/"));
     }
     default:
       throw new Error("Unknown tool: " + name);
