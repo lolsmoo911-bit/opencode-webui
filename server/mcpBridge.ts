@@ -286,23 +286,32 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
       const fileRows = Array.isArray(filesPayload?.data) ? filesPayload.data :
         Array.isArray(filesValue) ? filesValue : null;
       const filesValid = filesResponse.ok && fileRows !== null;
-      // OpenCode v2 exposes explicit readiness at /api/health. /api/info
-      // identifies the server but may not contain a readiness field.
-      const healthResponse = await requestEngine("/api/health", {
+      // Probe the current v2 health endpoint, then fall back to the v1 global
+      // health endpoint for compatible engines that do not expose /api/health.
+      let healthEndpoint = "/api/health";
+      let healthResponse = await requestEngine(healthEndpoint, {
         headers: { accept: "application/json" },
       });
-      const healthText = await healthResponse.text();
+      let healthText = await healthResponse.text();
+      if (!healthResponse.ok) {
+        healthEndpoint = "/global/health";
+        healthResponse = await requestEngine(healthEndpoint, {
+          headers: { accept: "application/json" },
+        });
+        healthText = await healthResponse.text();
+      }
       let healthValue: unknown;
       try { healthValue = healthText ? JSON.parse(healthText) : null; } catch { healthValue = null; }
       const healthPayload = healthValue !== null && typeof healthValue === "object"
         ? healthValue as Record<string, unknown> : null;
       const readiness = typeof healthPayload?.healthy === "boolean" ? healthPayload.healthy :
+        typeof healthPayload?.ready === "boolean" ? healthPayload.ready :
         typeof info.ready === "boolean" ? info.ready :
         typeof info.healthy === "boolean" ? info.healthy : null;
       return {
         endpoint: "/api/info",
         apiReachable: true,
-        healthEndpoint: "/api/health",
+        healthEndpoint,
         healthStatus: healthResponse.status,
         healthConfirmed: healthResponse.ok && readiness === true,
         readiness,
