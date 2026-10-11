@@ -87,6 +87,7 @@ import {
   startExtModules,
 } from "./ext/registry";
 import { resolveEngineOverride } from "./ext/engine";
+import { handleMcpBridgeRequest } from "./mcp-bridge";
 
 // `sandbox` argv — one command, every runtime: `bun run sandbox` (repo, the
 // script adds Vite), `bunx opencode-webui sandbox`, `./opencode-webui sandbox`
@@ -1367,6 +1368,17 @@ const server: Server<Record<string, unknown>> = Bun.serve({
     // DNS-rebinding + cross-origin guard — before ANY route, login included.
     const guarded = guardRequest(req, HOST, ALLOWED_HOSTS, CONFIG.trustProxy);
     if (guarded) return guarded;
+
+    // Authenticated server-to-server MCP endpoint. It uses the configured
+    // deployment password as a Bearer token and exposes only the bridge tools.
+    const mcpResponse = await handleMcpBridgeRequest(req, {
+      token: SERVICE_INPUT.password.expose(),
+      resolveEngine: async () => {
+        const ep = await serviceEndpoint();
+        return { url: ep.url, headers: Service.headers(ep) };
+      },
+    });
+    if (mcpResponse) return mcpResponse;
 
     // The unauthenticated surface: login page, login POST, logout.
     if (method === "GET" && path === "/login") return loginPageResponse(url);
