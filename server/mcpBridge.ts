@@ -146,13 +146,32 @@ function jsonBody(value: unknown): RequestInit {
 async function callTool(name: string, rawArgs: unknown, requestEngine: EngineRequest): Promise<unknown> {
   const args = record(rawArgs);
   switch (name) {
-    case "opencode_health":
-      return engineJson(requestEngine, "/api/global/health");
+    case "opencode_health": {
+      // OpenCode documents /global/health as the primary health endpoint.
+      // A few packaged/runtime versions expose /api/health instead, so only
+      // try read-only GET probes and reject HTML SPA fallbacks as non-health.
+      const candidates = ["/global/health", "/api/health", "/api/global/health"];
+      const attempts: string[] = [];
+      for (const path of candidates) {
+        const response = await requestEngine(path, { headers: { accept: "application/json" } });
+        const contentType = response.headers.get("content-type") ?? "";
+        const text = await response.text();
+        let value: unknown;
+        try { value = text ? JSON.parse(text) : null; } catch { value = null; }
+        if (response.ok && value && typeof value === "object" &&
+            (value as Record<string, unknown>).healthy === true) {
+          return { endpoint: path, ...value as Record<string, unknown> };
+        }
+        attempts.push(path + " -> HTTP " + response.status + " (" + (contentType || "no content-type") +
+          (text && !value ? ", non-JSON body: " + text.slice(0, 100).replace(/\\s+/g, " ") : "") + ")");
+      }
+      throw new Error("No valid OpenCode health JSON response. " + attempts.join("; "));
+    }
     case "list_sessions":
-      return engineJson(requestEngine, "/api/session");
+      return engineJson(requestEngine, "/session");
     case "create_session": {
       const title = typeof args.title === "string" ? args.title.trim() : "";
-      return engineJson(requestEngine, "/api/session", jsonBody(title ? { title } : {}));
+      return engineJson(requestEngine, "/session", jsonBody(title ? { title } : {}));
     }
     case "get_session_messages": {
       const sessionId = encodeURIComponent(stringArg(args, "session_id"));
@@ -160,22 +179,22 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
       const limit = typeof requestedLimit === "number" && Number.isInteger(requestedLimit)
         ? Math.min(100, Math.max(1, requestedLimit))
         : 50;
-      return engineJson(requestEngine, "/api/session/" + sessionId + "/message?limit=" + limit);
+      return engineJson(requestEngine, "/session/" + sessionId + "/message?limit=" + limit);
     }
     case "send_message": {
       const sessionId = encodeURIComponent(stringArg(args, "session_id"));
       const message = stringArg(args, "message");
-      return engineJson(requestEngine, "/api/session/" + sessionId + "/message", jsonBody({
+      return engineJson(requestEngine, "/session/" + sessionId + "/message", jsonBody({
         parts: [{ type: "text", text: message }],
       }));
     }
     case "list_files": {
       const path = typeof args.path === "string" ? args.path : ".";
-      return engineJson(requestEngine, "/api/file?path=" + encodeURIComponent(path));
+      return engineJson(requestEngine, "/file?path=" + encodeURIComponent(path));
     }
     case "read_file": {
       const path = stringArg(args, "path");
-      return engineJson(requestEngine, "/api/file/content?path=" + encodeURIComponent(path));
+      return engineJson(requestEngine, "/file/content?path=" + encodeURIComponent(path));
     }
     default:
       throw new Error("Unknown tool: " + name);
