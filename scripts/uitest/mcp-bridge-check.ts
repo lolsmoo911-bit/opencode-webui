@@ -17,9 +17,10 @@ const requestEngine = async (path: string, init?: RequestInit): Promise<Response
   calls.push({ path, method, ...(body === undefined ? {} : { body }) });
 
   if (path === "/api/info" && method === "GET") {
-    return json({ version: "2.0.26", pid: 123, ready: true });
+    return json({ version: "2.0.26", pid: 123 });
   }
-  if (path === "/api/health" && method === "GET") return json({ healthy: true });
+  if (path === "/api/health" && method === "GET") return new Response("Not found", { status: 404, headers: { "content-type": "text/plain" } });
+  if (path === "/global/health" && method === "GET") return new Response("OK", { status: 200, headers: { "content-type": "text/plain" } });
   if (path === "/api/session?limit=1" && method === "GET") return json({ data: [] });
   if (path === "/api/session" && method === "GET") return json({ data: [] });
   if (path === "/api/agent" && method === "GET") return json({ data: [{ name: "build" }] });
@@ -145,6 +146,14 @@ async function main() {
     assert.equal(serverInfo.version, "2.0.26");
     const diagnostics = await tool("opencode_api_diagnostics", {}, false);
     assert.equal(diagnostics.allEndpointsResponded, true);
+    const healthCheck = diagnostics.checks.find((entry: { name: string }) => entry.name === "health");
+    assert.equal(healthCheck.status, 200);
+    assert.equal(healthCheck.json, false);
+    assert.equal(healthCheck.readiness, null);
+    const health = await tool("opencode_health", {}, false);
+    assert.equal(health.healthStatus, 200);
+    assert.equal(health.healthConfirmed, false);
+    assert.equal(health.readiness, null);
     assert.equal(diagnostics.checks.find((entry: { name: string }) => entry.name === "filesystem").itemCount, 1);
     const catalog = await tool("opencode_bridge_capabilities", {}, false);
     assert.equal(catalog.mode, "restricted-diagnostic");
