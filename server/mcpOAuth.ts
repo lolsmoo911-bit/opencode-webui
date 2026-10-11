@@ -144,7 +144,7 @@ export function verifyMcpAccessToken(token: string, secret: string | undefined, 
  */
 export async function handleMcpOAuthRequest(req: Request, configuredSecret?: string): Promise<Response | null> {
   const url = new URL(req.url);
-  const origin = url.origin;
+  const origin = publicMcpOrigin(req);
   const resource = expectedResource(origin);
   const secret = configuredSecret ?? process.env.WEBUI_MCP_TOKEN;
 
