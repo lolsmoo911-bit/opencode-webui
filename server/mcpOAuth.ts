@@ -4,8 +4,9 @@ const AUTH_SERVER_PATH = "/.well-known/oauth-authorization-server";
 const RESOURCE_PATHS = new Set(["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]);
 const AUTH_CODE_TTL_SECONDS = 5 * 60;
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
+const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const MAX_BODY_BYTES = 32 * 1024;
-const ALLOWED_SCOPES = new Set(["opencode:read", "opencode:write"]);
+const ALLOWED_SCOPES = new Set(["opencode:read", "opencode:write", "offline_access"]);
 const USED_CODES = new Set<string>();
 
 type JsonRecord = Record<string, unknown>;
@@ -289,8 +290,35 @@ export async function handleMcpOAuthRequest(req: Request, configuredSecret?: str
     } catch {
       return oauthError("invalid_request", "Invalid form data.");
     }
-    if (form.get("grant_type") !== "authorization_code") {
-      return oauthError("unsupported_grant_type", "Only authorization_code is supported.");
+    const grantType = form.get("grant_type") ?? "";
+    if (grantType === "refresh_token") {
+      const refreshToken = form.get("refresh_token") ?? "";
+      const payload = verify(secret, refreshToken, "refresh") as AccessPayload | null;
+      const requestedResource = form.get("resource") ?? resource;
+      if (!payload || payload.resource !== resource || requestedResource !== resource ||
+          !payload.scope.split(/\\s+/).includes("offline_access")) {
+        return oauthError("invalid_grant", "Refresh token is invalid, expired, or not valid for this resource.");
+      }
+      const now = Math.floor(Date.now() / 1000);
+      const accessScopes = payload.scope.split(/\\s+/).filter(scope => scope !== "offline_access");
+      const accessToken = issueAccessToken(secret, {
+        scope: accessScopes.join(" "), resource, exp: now + ACCESS_TOKEN_TTL_SECONDS,
+        sub: payload.sub,
+      });
+      const rotatedRefreshToken = sign(secret, "refresh", {
+        scope: payload.scope, resource, exp: now + REFRESH_TOKEN_TTL_SECONDS,
+        sub: payload.sub,
+      } satisfies AccessPayload);
+      return json({
+        access_token: accessToken,
+        token_type: "Bearer",
+        expires_in: ACCESS_TOKEN_TTL_SECONDS,
+        scope: accessScopes.join(" "),
+        refresh_token: rotatedRefreshToken,
+      });
+    }
+    if (grantType !== "authorization_code") {
+      return oauthError("unsupported_grant_type", "Only authorization_code and refresh_token are supported.");
     }
     const code = form.get("code") ?? "";
     const payload = verify(secret, code, "code") as AuthorizationPayload | null;
@@ -309,16 +337,25 @@ export async function handleMcpOAuthRequest(req: Request, configuredSecret?: str
     }
     USED_CODES.add(payload.jti);
     const now = Math.floor(Date.now() / 1000);
+    const subject = b64url(randomBytes(12));
+    const accessScopes = payload.scope.split(/\\s+/).filter(scope => scope !== "offline_access");
     const accessToken = issueAccessToken(secret, {
-      scope: payload.scope, resource, exp: now + ACCESS_TOKEN_TTL_SECONDS,
-      sub: b64url(randomBytes(12)),
+      scope: accessScopes.join(" "), resource, exp: now + ACCESS_TOKEN_TTL_SECONDS,
+      sub: subject,
     });
-    return json({
+    const response: JsonRecord = {
       access_token: accessToken,
       token_type: "Bearer",
       expires_in: ACCESS_TOKEN_TTL_SECONDS,
-      scope: payload.scope,
-    }, 200, { pragma: "no-cache" });
+      scope: accessScopes.join(" "),
+    };
+    if (payload.scope.split(/\\s+/).includes("offline_access")) {
+      response.refresh_token = sign(secret, "refresh", {
+        scope: payload.scope, resource, exp: now + REFRESH_TOKEN_TTL_SECONDS,
+        sub: subject,
+      } satisfies AccessPayload);
+    }
+    return json(response, 200, { pragma: "no-cache" });
   }
 
   return new Response("Method Not Allowed", {
