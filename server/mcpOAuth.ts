@@ -185,19 +185,7 @@ export async function handleMcpOAuthRequest(req: Request, configuredSecret?: str
       return oauthError("invalid_client_metadata", "Only the code response type is supported.");
     }
     const clientName = typeof body.client_name === "string" ? body.client_name.slice(0, 100) : "ChatGPT MCP client";
-    const clientId = "client." + b64url(JSON.stringify({
-      client_id: "chatgpt-" + randomBytes(18).toString("hex"),
-      redirect_uris: redirects,
-      client_name: clientName,
-      exp: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60,
-    })) + "." + createHmac("sha256", signingKey(secret)).update("client." + b64url(JSON.stringify({
-      client_id: "chatgpt-" + randomBytes(18).toString("hex"),
-      redirect_uris: redirects,
-      client_name: clientName,
-      exp: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60,
-    })).digest("base64url");
-    // Recreate the signed client ID through the shared signer (avoids storing client registrations).
-    const payload = {
+    // Registration data is signed into the client ID so server restarts do not lose it.\n    const payload = {
       client_id: "chatgpt-" + randomBytes(18).toString("hex"),
       redirect_uris: redirects,
       client_name: clientName,
