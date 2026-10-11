@@ -79,19 +79,19 @@ const TOOLS = [
   },
 ] as const;
 
-function jsonResponse(payload: unknown, status = 200): Response {
+function jsonResponse(payload: unknown, status = 200, protocolVersion = "2025-06-18"): Response {
   return new Response(JSON.stringify(payload), {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",
-      "MCP-Protocol-Version": "2025-06-18",
+      "MCP-Protocol-Version": protocolVersion,
     },
   });
 }
 
-function rpcError(id: unknown, code: number, message: string, status = 400): Response {
-  return jsonResponse({ jsonrpc: "2.0", id: id ?? null, error: { code, message } }, status);
+function rpcError(id: unknown, code: number, message: string, status = 400, protocolVersion = "2025-06-18"): Response {
+  return jsonResponse({ jsonrpc: "2.0", id: id ?? null, error: { code, message } }, status, protocolVersion);
 }
 
 function tokenIsValid(expected: string | undefined, header: string | null): boolean {
@@ -214,10 +214,15 @@ export async function handleMcpBridge(req: Request, options: BridgeOptions): Pro
   const hasId = Object.prototype.hasOwnProperty.call(rpc, "id");
   const id = hasId ? rpc.id : null;
   const params = record(rpc.params);
+  const requestedHeaderVersion = req.headers.get("MCP-Protocol-Version");
+  const responseProtocolVersion = typeof requestedHeaderVersion === "string" &&
+    (PROTOCOL_VERSIONS as readonly string[]).includes(requestedHeaderVersion)
+    ? requestedHeaderVersion
+    : "2025-06-18";
   if (!hasId && rpc.method.startsWith("notifications/")) {
     return new Response(null, { status: 202, headers: { "cache-control": "no-store" } });
   }
-  if (!hasId) return rpcError(null, -32600, "Request ID is required");
+  if (!hasId) return rpcError(null, -32600, "Request ID is required", 400, responseProtocolVersion);
 
   try {
     switch (rpc.method) {
@@ -226,7 +231,7 @@ export async function handleMcpBridge(req: Request, options: BridgeOptions): Pro
         const protocolVersion = typeof requested === "string" &&
           (PROTOCOL_VERSIONS as readonly string[]).includes(requested)
           ? requested
-          : "2025-03-26";
+          : "2025-06-18";
         return jsonResponse({
           jsonrpc: "2.0",
           id,
@@ -236,12 +241,12 @@ export async function handleMcpBridge(req: Request, options: BridgeOptions): Pro
             serverInfo: { name: "opencode-webui-bridge", version: "0.1.0" },
             instructions: "Use send_message to delegate a task to OpenCode. Review results before deployment.",
           },
-        });
+        }, 200, protocolVersion);
       }
       case "ping":
-        return jsonResponse({ jsonrpc: "2.0", id, result: {} });
+        return jsonResponse({ jsonrpc: "2.0", id, result: {} }, 200, responseProtocolVersion);
       case "tools/list":
-        return jsonResponse({ jsonrpc: "2.0", id, result: { tools: TOOLS } });
+        return jsonResponse({ jsonrpc: "2.0", id, result: { tools: TOOLS } }, 200, responseProtocolVersion);
       case "tools/call": {
         const name = typeof params.name === "string" ? params.name : "";
         try {
@@ -250,20 +255,20 @@ export async function handleMcpBridge(req: Request, options: BridgeOptions): Pro
             jsonrpc: "2.0",
             id,
             result: { content: [{ type: "text", text: JSON.stringify(result) }], isError: false },
-          });
+          }, 200, responseProtocolVersion);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           return jsonResponse({
             jsonrpc: "2.0",
             id,
             result: { content: [{ type: "text", text: message }], isError: true },
-          });
+          }, 200, responseProtocolVersion);
         }
       }
       default:
-        return rpcError(id, -32601, "Method not found: " + rpc.method, 404);
+        return rpcError(id, -32601, "Method not found: " + rpc.method, 404, responseProtocolVersion);
     }
   } catch {
-    return rpcError(id, -32603, "Internal MCP bridge error", 500);
+    return rpcError(id, -32603, "Internal MCP bridge error", 500, responseProtocolVersion);
   }
 }
