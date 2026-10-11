@@ -314,6 +314,7 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
         fileEntryCountReturned: filesValid ? fileRows.length : null,
         filesystemStatus: filesResponse.status,
       };
+    }
     case "opencode_server_info": {
       const value = record(await engineJson(requestEngine, "/api/info", {
         headers: { accept: "application/json" },
