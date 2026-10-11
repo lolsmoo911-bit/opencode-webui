@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import { verifyMcpAccessToken } from "./mcpOAuth";
+import { publicMcpOrigin, verifyMcpAccessToken } from "./mcpOAuth";
 
 type EngineRequest = (path: string, init?: RequestInit) => Promise<Response>;
 type BridgeOptions = { token?: string; requestEngine: EngineRequest };
@@ -193,7 +193,7 @@ export async function handleMcpBridge(req: Request, options: BridgeOptions): Pro
   const header = req.headers.get("authorization");
   const bearer = /^Bearer\s+(.+)$/i.exec(header ?? "")?.[1]?.trim() ?? "";
   const staticToken = tokenIsValid(secret, header);
-  const origin = new URL(req.url).origin;
+  const origin = publicMcpOrigin(req);
   const oauthAccess = !staticToken
     ? verifyMcpAccessToken(bearer, secret, origin + "/mcp")
     : null;
