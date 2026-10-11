@@ -225,7 +225,7 @@ export async function handleMcpOAuthRequest(req: Request, configuredSecret?: str
     const redirectUri = query.get("redirect_uri") ?? "";
     const challenge = query.get("code_challenge") ?? "";
     const method = query.get("code_challenge_method") ?? "";
-    const scopes = (query.get("scope") ?? "opencode:read opencode:write").split(/\s+/).filter(Boolean);
+    const scopes = (query.get("scope") ?? "opencode:read opencode:write offline_access").split(/\s+/).filter(Boolean);
     const requestedResource = query.get("resource") ?? resource;
     const responseType = query.get("response_type");
     const state = query.get("state") ?? "";
@@ -261,7 +261,7 @@ export async function handleMcpOAuthRequest(req: Request, configuredSecret?: str
     const method = form.get("code_challenge_method") ?? "";
     const requestedResource = form.get("resource") ?? resource;
     const state = form.get("state") ?? "";
-    const scopes = (form.get("scope") ?? "opencode:read opencode:write").split(/\s+/).filter(Boolean);
+    const scopes = (form.get("scope") ?? "opencode:read opencode:write offline_access").split(/\s+/).filter(Boolean);
     if (!client || !client.redirect_uris.includes(redirectUri) || !validChatGptRedirect(redirectUri) ||
         !/^[A-Za-z0-9_-]{43,128}$/.test(challenge) || method !== "S256" || requestedResource !== resource ||
         scopes.some(scope => !ALLOWED_SCOPES.has(scope))) {
@@ -296,11 +296,11 @@ export async function handleMcpOAuthRequest(req: Request, configuredSecret?: str
       const payload = verify(secret, refreshToken, "refresh") as AccessPayload | null;
       const requestedResource = form.get("resource") ?? resource;
       if (!payload || payload.resource !== resource || requestedResource !== resource ||
-          !payload.scope.split(/\\s+/).includes("offline_access")) {
+          !payload.scope.split(/\s+/).includes("offline_access")) {
         return oauthError("invalid_grant", "Refresh token is invalid, expired, or not valid for this resource.");
       }
       const now = Math.floor(Date.now() / 1000);
-      const accessScopes = payload.scope.split(/\\s+/).filter(scope => scope !== "offline_access");
+      const accessScopes = payload.scope.split(/\s+/).filter(scope => scope !== "offline_access");
       const accessToken = issueAccessToken(secret, {
         scope: accessScopes.join(" "), resource, exp: now + ACCESS_TOKEN_TTL_SECONDS,
         sub: payload.sub,
@@ -338,7 +338,7 @@ export async function handleMcpOAuthRequest(req: Request, configuredSecret?: str
     USED_CODES.add(payload.jti);
     const now = Math.floor(Date.now() / 1000);
     const subject = b64url(randomBytes(12));
-    const accessScopes = payload.scope.split(/\\s+/).filter(scope => scope !== "offline_access");
+    const accessScopes = payload.scope.split(/\s+/).filter(scope => scope !== "offline_access");
     const accessToken = issueAccessToken(secret, {
       scope: accessScopes.join(" "), resource, exp: now + ACCESS_TOKEN_TTL_SECONDS,
       sub: subject,
@@ -349,7 +349,7 @@ export async function handleMcpOAuthRequest(req: Request, configuredSecret?: str
       expires_in: ACCESS_TOKEN_TTL_SECONDS,
       scope: accessScopes.join(" "),
     };
-    if (payload.scope.split(/\\s+/).includes("offline_access")) {
+    if (payload.scope.split(/\s+/).includes("offline_access")) {
       response.refresh_token = sign(secret, "refresh", {
         scope: payload.scope, resource, exp: now + REFRESH_TOKEN_TTL_SECONDS,
         sub: subject,
