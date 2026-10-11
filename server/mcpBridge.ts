@@ -76,6 +76,44 @@ const TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
   {
+    name: "get_session_status",
+    description: "Read safe metadata for an existing OpenCode session.",
+    inputSchema: {
+      type: "object",
+      properties: { session_id: { type: "string", minLength: 1 } },
+      required: ["session_id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "get_session_context",
+    description: "Read the active context messages in an OpenCode session.",
+    inputSchema: {
+      type: "object",
+      properties: { session_id: { type: "string", minLength: 1 } },
+      required: ["session_id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "get_session_diff",
+    description: "Read the file diff from the latest OpenCode session turn, optionally limited by message IDs or context size.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", minLength: 1 },
+        from: { type: "string" },
+        to: { type: "string" },
+        context: { type: "string" },
+      },
+      required: ["session_id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: "list_files",
     description: "List files and directories in the active OpenCode project.",
     inputSchema: {
@@ -357,6 +395,25 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
         assistant_response: textParts.join("\n") || legacyText.join("\n") || null,
         messages,
       };
+    }
+    case "get_session_status": {
+      const sessionId = encodeURIComponent(stringArg(args, "session_id"));
+      return engineJson(requestEngine, "/api/session/" + sessionId);
+    }
+    case "get_session_context": {
+      const sessionId = encodeURIComponent(stringArg(args, "session_id"));
+      return engineJson(requestEngine, "/api/session/" + sessionId + "/context");
+    }
+    case "get_session_diff": {
+      const sessionId = encodeURIComponent(stringArg(args, "session_id"));
+      const query = new URLSearchParams();
+      for (const key of ["from", "to", "context"] as const) {
+        if (typeof args[key] === "string" && (args[key] as string).trim()) {
+          query.set(key, (args[key] as string).trim());
+        }
+      }
+      const suffix = query.size ? "?" + query.toString() : "";
+      return engineJson(requestEngine, "/api/session/" + sessionId + "/diff" + suffix);
     }
     case "list_files": {
       const path = typeof args.path === "string" ? args.path : ".";
