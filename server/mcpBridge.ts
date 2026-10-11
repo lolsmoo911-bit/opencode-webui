@@ -272,7 +272,7 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
         .map((part) => String(record(part).text));
       return {
         session_id: decodeURIComponent(sessionId),
-        assistant_response: textParts.join("\\n") || legacyText.join("\\n") || null,
+        assistant_response: textParts.join("\n") || legacyText.join("\n") || null,
         messages,
       };
     }
