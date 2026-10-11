@@ -21,7 +21,8 @@ permissions:
 
 jobs:
   deploy:
-    if: github.ref_type == 'branch'
+    # Do not run a deployment when manually dispatched against the default branch.
+    if: github.ref_type == 'branch' && github.ref != 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
