@@ -1,6 +1,7 @@
 name: prisma-deploy
 
 # The preview environment sets NODE_ENV=production and XDG_* paths for writable OpenCode state.
+# The MCP bridge feature branch is deployed only to its isolated Prisma preview.
 
 on:
   push:
