@@ -190,12 +190,26 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
       const fileRows = Array.isArray(filesPayload?.data) ? filesPayload.data :
         Array.isArray(filesValue) ? filesValue : null;
       const filesValid = filesResponse.ok && fileRows !== null;
-      const readiness = typeof info.ready === "boolean" ? info.ready :
+      // OpenCode v2 exposes explicit readiness at /api/health. /api/info
+      // identifies the server but may not contain a readiness field.
+      const healthResponse = await requestEngine("/api/health", {
+        headers: { accept: "application/json" },
+      });
+      const healthText = await healthResponse.text();
+      let healthValue: unknown;
+      try { healthValue = healthText ? JSON.parse(healthText) : null; } catch { healthValue = null; }
+      const healthPayload = healthValue !== null && typeof healthValue === "object"
+        ? healthValue as Record<string, unknown> : null;
+      const readiness = typeof healthPayload?.healthy === "boolean" ? healthPayload.healthy :
+        typeof info.ready === "boolean" ? info.ready :
         typeof info.healthy === "boolean" ? info.healthy : null;
       return {
         endpoint: "/api/info",
         apiReachable: true,
-        healthConfirmed: readiness === true,
+        healthEndpoint: "/api/health",
+        healthStatus: healthResponse.status,
+        apiReachable: true,
+        healthConfirmed: healthResponse.ok && readiness === true,
         readiness,
         version: info.version,
         pid: typeof info.pid === "number" ? info.pid : null,
@@ -203,9 +217,8 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
         sessionCountReturned: sessionRows.length,
         filesystemApi: filesValid ? "ok" : "failed",
         fileEntryCountReturned: filesValid ? fileRows.length : null,
-        filesystemStatus: filesValid ? filesResponse.status : filesResponse.status,
+        filesystemStatus: filesResponse.status,
       };
-    }
     case "list_sessions":
       return engineJson(requestEngine, "/api/session");
     case "create_session": {
