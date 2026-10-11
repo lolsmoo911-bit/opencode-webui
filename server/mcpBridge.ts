@@ -14,6 +14,24 @@ const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: "opencode_server_info",
+    description: "Return sanitized OpenCode server identity and readiness fields without exposing project data.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "opencode_api_diagnostics",
+    description: "Probe server, session-list, filesystem-list, and health endpoints. Returns HTTP statuses and item counts only, never session titles or file names.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "opencode_bridge_capabilities",
+    description: "Explain which bridge tools exist and which require authorization; does not expose credentials or project data.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: "list_sessions",
     description: "List sessions in the currently configured OpenCode workspace.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -79,6 +97,13 @@ const TOOLS = [
     annotations: { readOnlyHint: true },
   },
 ] as const;
+
+const PUBLIC_DIAGNOSTIC_TOOLS = new Set([
+  "opencode_health",
+  "opencode_server_info",
+  "opencode_api_diagnostics",
+  "opencode_bridge_capabilities",
+]);
 
 function jsonResponse(payload: unknown, status = 200, protocolVersion = "2025-06-18"): Response {
   return new Response(JSON.stringify(payload), {
@@ -218,6 +243,63 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
         fileEntryCountReturned: filesValid ? fileRows.length : null,
         filesystemStatus: filesResponse.status,
       };
+    case "opencode_server_info": {
+      const value = record(await engineJson(requestEngine, "/api/info", {
+        headers: { accept: "application/json" },
+      }));
+      if (typeof value.version !== "string") {
+        throw new Error("OpenCode /api/info did not return a valid server version.");
+      }
+      return {
+        version: value.version,
+        pid: typeof value.pid === "number" ? value.pid : null,
+        ready: typeof value.ready === "boolean" ? value.ready : null,
+        healthy: typeof value.healthy === "boolean" ? value.healthy : null,
+      };
+    }
+    case "opencode_api_diagnostics": {
+      const probe = async (name: string, path: string) => {
+        try {
+          const response = await requestEngine(path, { headers: { accept: "application/json" } });
+          const text = await response.text();
+          let value: unknown = null;
+          try { value = text ? JSON.parse(text) : null; } catch { /* shape remains false */ }
+          const payload = record(value);
+          const rows = Array.isArray(value) ? value :
+            Array.isArray(payload.data) ? payload.data :
+            Array.isArray(payload.items) ? payload.items : null;
+          const readiness = typeof payload.healthy === "boolean" ? payload.healthy :
+            typeof payload.ready === "boolean" ? payload.ready : null;
+          return {
+            name,
+            status: response.status,
+            ok: response.ok,
+            json: value !== null && typeof value === "object",
+            itemCount: rows?.length ?? null,
+            readiness,
+          };
+        } catch {
+          return { name, status: null, ok: false, json: false, itemCount: null, readiness: null };
+        }
+      };
+      const checks = await Promise.all([
+        probe("server_info", "/api/info"),
+        probe("sessions", "/api/session?limit=1"),
+        probe("filesystem", "/api/fs/list?path=."),
+        probe("health", "/api/health"),
+      ]);
+      return {
+        allEndpointsResponded: checks.every(check => check.ok && check.json),
+        checks,
+      };
+    }
+    case "opencode_bridge_capabilities":
+      return {
+        mode: process.env.WEBUI_MCP_ALLOW_NO_AUTH === "1" ? "restricted-diagnostic" : "authorization-required",
+        publicTools: [...PUBLIC_DIAGNOSTIC_TOOLS],
+        protectedTools: TOOLS.map(tool => tool.name).filter(name => !PUBLIC_DIAGNOSTIC_TOOLS.has(name)),
+        note: "Session contents, project files, session creation, and prompt submission remain protected. Diagnostic probes expose counts and HTTP statuses only.",
+      };
     case "list_sessions":
       return engineJson(requestEngine, "/api/session");
     case "create_session": {
@@ -307,8 +389,8 @@ export async function handleMcpBridge(req: Request, options: BridgeOptions): Pro
   // Temporary Preview-only diagnostic mode. Without an Authorization header,
   // expose only the non-sensitive health check; all project/session reads and
   // every write-capable tool remain authenticated.
-  const publicHealthOnly = process.env.WEBUI_MCP_ALLOW_NO_AUTH === "1" && !header;
-  if (!staticToken && !oauthAccess && !publicHealthOnly) {
+  const publicDiagnosticOnly = process.env.WEBUI_MCP_ALLOW_NO_AUTH === "1" && !header;
+  if (!staticToken && !oauthAccess && !publicDiagnosticOnly) {
     return new Response(JSON.stringify({ error: "MCP authorization is required." }), {
       status: 401,
       headers: {
@@ -376,13 +458,13 @@ export async function handleMcpBridge(req: Request, options: BridgeOptions): Pro
         return jsonResponse({
           jsonrpc: "2.0",
           id,
-          result: { tools: publicHealthOnly ? TOOLS.filter(tool => tool.name === "opencode_health") : TOOLS },
+          result: { tools: publicDiagnosticOnly ? TOOLS.filter(tool => PUBLIC_DIAGNOSTIC_TOOLS.has(tool.name)) : TOOLS },
         }, 200, responseProtocolVersion);
       case "tools/call": {
         const name = typeof params.name === "string" ? params.name : "";
         try {
-          if (publicHealthOnly && name !== "opencode_health") {
-            throw new Error("Unauthenticated test mode permits only opencode_health. Configure OAuth to access sessions and files or send tasks.");
+          if (publicDiagnosticOnly && !PUBLIC_DIAGNOSTIC_TOOLS.has(name)) {
+            throw new Error("Restricted diagnostic mode permits only non-sensitive diagnostic tools. Authorization is required to access sessions/files or send tasks.");
           }
           if (oauthAccess) {
             const writeTools = new Set(["create_session", "send_message"]);
