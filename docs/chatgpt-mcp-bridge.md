@@ -28,3 +28,7 @@ A remote MCP endpoint is not automatically connectable from every ChatGPT plan.
 Check custom-app/MCP availability for the account before relying on it as a
 ChatGPT tool. The same endpoint can be tested from other MCP clients that
 support Streamable HTTP and bearer-token authentication.
+
+## Preview validation
+
+The isolated feature-branch workflow runs TypeScript typechecking before the production bundle build. The live production branch is not changed by this preview workflow.
