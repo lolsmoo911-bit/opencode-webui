@@ -114,6 +114,39 @@ const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: "list_agents",
+    description: "List registered OpenCode agents.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "list_models",
+    description: "List available OpenCode models and provider availability.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "list_commands",
+    description: "List registered OpenCode slash commands.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "find_files",
+    description: "Search the active OpenCode workspace for files or directories by name.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1 },
+        type: { type: "string", enum: ["file", "directory"] },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: "list_files",
     description: "List files and directories in the active OpenCode project.",
     inputSchema: {
@@ -414,6 +447,21 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
       }
       const suffix = query.size ? "?" + query.toString() : "";
       return engineJson(requestEngine, "/api/session/" + sessionId + "/diff" + suffix);
+    }
+    case "list_agents":
+      return engineJson(requestEngine, "/api/agent");
+    case "list_models":
+      return engineJson(requestEngine, "/api/model");
+    case "list_commands":
+      return engineJson(requestEngine, "/api/command");
+    case "find_files": {
+      const query = stringArg(args, "query");
+      const type = args.type === "directory" ? "directory" : "file";
+      const rawLimit = args.limit;
+      const limit = typeof rawLimit === "number" && Number.isInteger(rawLimit)
+        ? Math.min(100, Math.max(1, rawLimit)) : 50;
+      const params = new URLSearchParams({ query, type, limit: String(limit) });
+      return engineJson(requestEngine, "/api/fs/find?" + params.toString());
     }
     case "list_files": {
       const path = typeof args.path === "string" ? args.path : ".";
