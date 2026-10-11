@@ -363,11 +363,16 @@ async function callTool(name: string, rawArgs: unknown, requestEngine: EngineReq
           return { name, status: null, ok: false, json: false, itemCount: null, readiness: null };
         }
       };
+      const probeHealth = async () => {
+        const current = await probe("health", "/api/health");
+        // Older compatible OpenCode engines expose health at /global/health.
+        return current.ok ? current : probe("health", "/global/health");
+      };
       const checks = await Promise.all([
         probe("server_info", "/api/info"),
         probe("sessions", "/api/session?limit=1"),
         probe("filesystem", "/api/fs/list?path=."),
-        probe("health", "/api/health"),
+        probeHealth(),
       ]);
       return {
         allEndpointsResponded: checks.every(check => check.ok && check.json),
