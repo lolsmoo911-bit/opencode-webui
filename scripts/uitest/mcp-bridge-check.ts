@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { guardRequest, resolveAllowedHosts } from "../../server/auth";
 import { handleMcpBridge } from "../../server/mcpBridge";
 
 const TEST_TOKEN = "unit-test-token-which-is-at-least-32-characters";
@@ -93,6 +94,22 @@ async function tool(name: string, args: Record<string, unknown> = {}, authorized
 }
 
 async function main() {
+  const previewHost = "preview.test";
+  const allowedHosts = resolveAllowedHosts();
+  const requestFor = (path: string, origin: string) => new Request(`https://${previewHost}${path}`, {
+    method: "POST",
+    headers: { host: previewHost, origin, "content-type": "application/x-www-form-urlencoded" },
+    body: "test=1",
+  });
+  const oauthConsentGuard = guardRequest(requestFor("/oauth/authorize", "null"), previewHost, allowedHosts, false);
+  assert.equal(oauthConsentGuard, null, "OAuth consent POST should permit an opaque Origin after host validation");
+  const mcpGuard = guardRequest(requestFor("/mcp", "null"), previewHost, allowedHosts, false);
+  assert.equal(mcpGuard?.status, 403, "Opaque Origin must remain blocked for MCP POSTs");
+  const tokenGuard = guardRequest(requestFor("/oauth/token", "null"), previewHost, allowedHosts, false);
+  assert.equal(tokenGuard?.status, 403, "Opaque Origin must remain blocked for token exchange");
+  const crossOriginGuard = guardRequest(requestFor("/oauth/authorize", "https://attacker.test"), previewHost, allowedHosts, false);
+  assert.equal(crossOriginGuard?.status, 403, "A concrete foreign Origin must remain blocked on OAuth consent");
+
   const sessions = await tool("list_sessions");
   assert.deepEqual(sessions.data, []);
 
