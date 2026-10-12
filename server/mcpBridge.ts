@@ -1,0 +1,617 @@
+import { timingSafeEqual } from "node:crypto";
+import { publicMcpOrigin, verifyMcpAccessToken } from "./mcpOAuth";
+
+type EngineRequest = (path: string, init?: RequestInit) => Promise<Response>;
+type BridgeOptions = { token?: string; requestEngine: EngineRequest };
+type JsonRpcRequest = { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: unknown };
+
+const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"] as const;
+const TOOLS = [
+  {
+    name: "opencode_health",
+    description: "Check whether the connected OpenCode engine is healthy.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "opencode_server_info",
+    description: "Return sanitized OpenCode server identity and readiness fields without exposing project data.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "opencode_api_diagnostics",
+    description: "Probe server, session-list, filesystem-list, and health endpoints. Returns HTTP statuses and item counts only, never session titles or file names.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "opencode_bridge_capabilities",
+    description: "Explain which bridge tools exist and which require authorization; does not expose credentials or project data.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "list_sessions",
+    description: "List sessions in the currently configured OpenCode workspace.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "create_session",
+    description: "Create a new OpenCode session. This does not itself edit files.",
+    inputSchema: {
+      type: "object",
+      properties: { title: { type: "string", description: "Optional short session title." } },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  },
+  {
+    name: "get_session_messages",
+    description: "Read the messages in an OpenCode session.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "OpenCode session ID." },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+      required: ["session_id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "send_message",
+    description: "Send a task or prompt to OpenCode. OpenCode may read or modify project files according to its own permissions and configured model.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "OpenCode session ID." },
+        message: { type: "string", minLength: 1, description: "Task or prompt for OpenCode." },
+      },
+      required: ["session_id", "message"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true },
+  },
+  {
+    name: "get_session_status",
+    description: "Read safe metadata for an existing OpenCode session.",
+    inputSchema: {
+      type: "object",
+      properties: { session_id: { type: "string", minLength: 1 } },
+      required: ["session_id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "get_session_context",
+    description: "Read the active context messages in an OpenCode session.",
+    inputSchema: {
+      type: "object",
+      properties: { session_id: { type: "string", minLength: 1 } },
+      required: ["session_id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "get_session_diff",
+    description: "Read the file diff from the latest OpenCode session turn, optionally limited by message IDs or context size.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", minLength: 1 },
+        from: { type: "string" },
+        to: { type: "string" },
+        context: { type: "string" },
+      },
+      required: ["session_id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "list_agents",
+    description: "List registered OpenCode agents.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "list_models",
+    description: "List available OpenCode models and provider availability.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "list_commands",
+    description: "List registered OpenCode slash commands.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "find_files",
+    description: "Search the active OpenCode workspace for files or directories by name.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1 },
+        type: { type: "string", enum: ["file", "directory"] },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "list_files",
+    description: "List files and directories in the active OpenCode project.",
+    inputSchema: {
+      type: "object",
+      properties: { path: { type: "string", description: "Directory path; defaults to the project root." } },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "read_file",
+    description: "Read a text file from the active OpenCode project.",
+    inputSchema: {
+      type: "object",
+      properties: { path: { type: "string", minLength: 1, description: "Project-relative file path." } },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+] as const;
+
+const PUBLIC_DIAGNOSTIC_TOOLS = new Set([
+  "opencode_health",
+  "opencode_server_info",
+  "opencode_api_diagnostics",
+  "opencode_bridge_capabilities",
+]);
+
+function jsonResponse(payload: unknown, status = 200, protocolVersion = "2025-06-18"): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      "MCP-Protocol-Version": protocolVersion,
+    },
+  });
+}
+
+function rpcError(id: unknown, code: number, message: string, status = 400, protocolVersion = "2025-06-18"): Response {
+  return jsonResponse({ jsonrpc: "2.0", id: id ?? null, error: { code, message } }, status, protocolVersion);
+}
+
+function tokenIsValid(expected: string | undefined, header: string | null): boolean {
+  if (!expected || expected.length < 32 || !header?.startsWith("Bearer ")) return false;
+  const supplied = header.slice("Bearer ".length).trim();
+  const left = Buffer.from(expected, "utf8");
+  const right = Buffer.from(supplied, "utf8");
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function stringArg(args: Record<string, unknown>, name: string): string {
+  const value = args[name];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("Missing or invalid required argument: " + name);
+  }
+  return value.trim();
+}
+
+async function engineJson(requestEngine: EngineRequest, path: string, init?: RequestInit): Promise<unknown> {
+  const response = await requestEngine(path, init);
+  const text = await response.text();
+  let value: unknown = null;
+  if (text) {
+    try {
+      value = JSON.parse(text);
+    } catch {
+      value = text;
+    }
+  }
+  if (!response.ok) {
+    const detail = typeof value === "string" ? value : JSON.stringify(value);
+    throw new Error("OpenCode API returned HTTP " + response.status + (detail ? ": " + detail.slice(0, 400) : ""));
+  }
+  return value;
+}
+
+function jsonBody(value: unknown): RequestInit {
+  return {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(value),
+  };
+}
+
+async function callTool(name: string, rawArgs: unknown, requestEngine: EngineRequest): Promise<unknown> {
+  const args = record(rawArgs);
+  switch (name) {
+    case "opencode_health": {
+      // OpenCode v2 exposes its server identity/readiness at /api/info.
+      // Also probe a bounded read-only session-list request so this diagnostic
+      // verifies the session API, without returning any session titles/content.
+      const response = await requestEngine("/api/info", { headers: { accept: "application/json" } });
+      const contentType = response.headers.get("content-type") ?? "";
+      const text = await response.text();
+      let value: unknown;
+      try { value = text ? JSON.parse(text) : null; } catch { value = null; }
+      const info = value && typeof value === "object" ? value as Record<string, unknown> : null;
+      if (!response.ok || !info || typeof info.version !== "string") {
+        throw new Error("OpenCode /api/info failed: HTTP " + response.status + " (" +
+          (contentType || "no content-type") + (text && !info ? ", non-JSON body: " + text.slice(0, 120).replace(/\\s+/g, " ") : "") + ")");
+      }
+      const sessionsResponse = await requestEngine("/api/session?limit=1", {
+        headers: { accept: "application/json" },
+      });
+      const sessionsText = await sessionsResponse.text();
+      let sessionsValue: unknown;
+      try { sessionsValue = sessionsText ? JSON.parse(sessionsText) : null; } catch { sessionsValue = null; }
+      const sessionPayload = sessionsValue !== null && typeof sessionsValue === "object"
+        ? sessionsValue as Record<string, unknown> : null;
+      const sessionRows = Array.isArray(sessionsValue) ? sessionsValue :
+        Array.isArray(sessionPayload?.data) ? sessionPayload.data :
+        Array.isArray(sessionPayload?.items) ? sessionPayload.items : null;
+      const sessionsValid = sessionsResponse.ok && sessionRows !== null;
+      if (!sessionsValid) {
+        throw new Error("OpenCode /api/info responded (version " + info.version +
+          "), but /api/session probe failed: HTTP " + sessionsResponse.status +
+          ". Check service authorization and the active project.");
+      }
+      // Validate the read-only filesystem listing endpoint without exposing any
+      // filenames or project contents in the public diagnostic response.
+      const filesResponse = await requestEngine("/api/fs/list?path=.", {
+        headers: { accept: "application/json" },
+      });
+      const filesText = await filesResponse.text();
+      let filesValue: unknown;
+      try { filesValue = filesText ? JSON.parse(filesText) : null; } catch { filesValue = null; }
+      const filesPayload = filesValue !== null && typeof filesValue === "object"
+        ? filesValue as Record<string, unknown> : null;
+      const fileRows = Array.isArray(filesPayload?.data) ? filesPayload.data :
+        Array.isArray(filesValue) ? filesValue : null;
+      const filesValid = filesResponse.ok && fileRows !== null;
+      // Probe the current v2 health endpoint, then fall back to the v1 global
+      // health endpoint for compatible engines that do not expose /api/health.
+      let healthEndpoint = "/api/health";
+      let healthResponse = await requestEngine(healthEndpoint, {
+        headers: { accept: "application/json" },
+      });
+      let healthText = await healthResponse.text();
+      if (!healthResponse.ok) {
+        healthEndpoint = "/global/health";
+        healthResponse = await requestEngine(healthEndpoint, {
+          headers: { accept: "application/json" },
+        });
+        healthText = await healthResponse.text();
+      }
+      let healthValue: unknown;
+      try { healthValue = healthText ? JSON.parse(healthText) : null; } catch { healthValue = null; }
+      const healthPayload = healthValue !== null && typeof healthValue === "object"
+        ? healthValue as Record<string, unknown> : null;
+      const readiness = typeof healthPayload?.healthy === "boolean" ? healthPayload.healthy :
+        typeof healthPayload?.ready === "boolean" ? healthPayload.ready :
+        typeof info.ready === "boolean" ? info.ready :
+        typeof info.healthy === "boolean" ? info.healthy : null;
+      return {
+        endpoint: "/api/info",
+        apiReachable: true,
+        healthEndpoint,
+        healthStatus: healthResponse.status,
+        healthConfirmed: healthResponse.ok && readiness === true,
+        readiness,
+        version: info.version,
+        pid: typeof info.pid === "number" ? info.pid : null,
+        sessionApi: "ok",
+        sessionCountReturned: sessionRows.length,
+        filesystemApi: filesValid ? "ok" : "failed",
+        fileEntryCountReturned: filesValid ? fileRows.length : null,
+        filesystemStatus: filesResponse.status,
+      };
+    }
+    case "opencode_server_info": {
+      const value = record(await engineJson(requestEngine, "/api/info", {
+        headers: { accept: "application/json" },
+      }));
+      if (typeof value.version !== "string") {
+        throw new Error("OpenCode /api/info did not return a valid server version.");
+      }
+      return {
+        version: value.version,
+        pid: typeof value.pid === "number" ? value.pid : null,
+        ready: typeof value.ready === "boolean" ? value.ready : null,
+        healthy: typeof value.healthy === "boolean" ? value.healthy : null,
+      };
+    }
+    case "opencode_api_diagnostics": {
+      const probe = async (name: string, path: string) => {
+        try {
+          const response = await requestEngine(path, { headers: { accept: "application/json" } });
+          const text = await response.text();
+          let value: unknown = null;
+          try { value = text ? JSON.parse(text) : null; } catch { /* shape remains false */ }
+          const payload = record(value);
+          const rows = Array.isArray(value) ? value :
+            Array.isArray(payload.data) ? payload.data :
+            Array.isArray(payload.items) ? payload.items : null;
+          const readiness = typeof payload.healthy === "boolean" ? payload.healthy :
+            typeof payload.ready === "boolean" ? payload.ready : null;
+          return {
+            name,
+            status: response.status,
+            ok: response.ok,
+            json: value !== null && typeof value === "object",
+            itemCount: rows?.length ?? null,
+            readiness,
+          };
+        } catch {
+          return { name, status: null, ok: false, json: false, itemCount: null, readiness: null };
+        }
+      };
+      const probeHealth = async () => {
+        const current = await probe("health", "/api/health");
+        // Older compatible OpenCode engines expose health at /global/health.
+        return current.ok ? current : probe("health", "/global/health");
+      };
+      const checks = await Promise.all([
+        probe("server_info", "/api/info"),
+        probe("sessions", "/api/session?limit=1"),
+        probe("filesystem", "/api/fs/list?path=."),
+        probeHealth(),
+      ]);
+      return {
+        allEndpointsResponded: checks.every(check => check.ok), // Health endpoints may return plain text with HTTP 200.
+        checks,
+      };
+    }
+    case "opencode_bridge_capabilities":
+      return {
+        mode: process.env.WEBUI_MCP_ALLOW_NO_AUTH === "1" ? "restricted-diagnostic" : "authorization-required",
+        publicTools: [...PUBLIC_DIAGNOSTIC_TOOLS],
+        protectedTools: TOOLS.map(tool => tool.name).filter(name => !PUBLIC_DIAGNOSTIC_TOOLS.has(name)),
+        note: "Session contents, project files, session creation, and prompt submission remain protected. Diagnostic probes expose counts and HTTP statuses only.",
+      };
+    case "list_sessions":
+      return engineJson(requestEngine, "/api/session");
+    case "create_session": {
+      const title = typeof args.title === "string" ? args.title.trim() : "";
+      return engineJson(requestEngine, "/api/session", jsonBody(title ? { title } : {}));
+    }
+    case "get_session_messages": {
+      const sessionId = encodeURIComponent(stringArg(args, "session_id"));
+      const requestedLimit = args.limit;
+      const limit = typeof requestedLimit === "number" && Number.isInteger(requestedLimit)
+        ? Math.min(100, Math.max(1, requestedLimit))
+        : 50;
+      return engineJson(requestEngine, "/api/session/" + sessionId + "/message?limit=" + limit);
+    }
+    case "send_message": {
+      const sessionId = encodeURIComponent(stringArg(args, "session_id"));
+      const message = stringArg(args, "message");
+
+      // OpenCode v2 accepts prompts at /prompt and returns 204 after admitting
+      // the input. Wait for the agent loop, then return the newest transcript
+      // entries so the MCP caller receives the actual answer rather than null.
+      await engineJson(requestEngine, "/api/session/" + sessionId + "/prompt", jsonBody({
+        id: null,
+        prompt: { text: message },
+      }));
+      await engineJson(requestEngine, "/api/experimental/session/" + sessionId + "/wait", {
+        method: "POST",
+      });
+      const transcript = await engineJson(
+        requestEngine,
+        "/api/session/" + sessionId + "/message?limit=10&order=desc",
+      );
+      const envelope = record(transcript);
+      const messages = Array.isArray(transcript) ? transcript :
+        Array.isArray(envelope.data) ? envelope.data : [];
+      const assistant = messages.find((item) => {
+        const row = record(item);
+        const info = record(row.info);
+        return row.type === "assistant" || info.role === "assistant" || info.type === "assistant";
+      });
+      const assistantRow = record(assistant);
+      const assistantInfo = record(assistantRow.info);
+      const content = Array.isArray(assistantRow.content) ? assistantRow.content :
+        Array.isArray(assistantInfo.content) ? assistantInfo.content : [];
+      const textParts = content
+        .filter((part) => record(part).type === "text" && typeof record(part).text === "string")
+        .map((part) => String(record(part).text));
+      const legacyParts = Array.isArray(assistantRow.parts) ? assistantRow.parts :
+        Array.isArray(assistantInfo.parts) ? assistantInfo.parts : [];
+      const legacyText = legacyParts
+        .filter((part) => typeof record(part).text === "string")
+        .map((part) => String(record(part).text));
+      return {
+        session_id: decodeURIComponent(sessionId),
+        assistant_response: textParts.join("\n") || legacyText.join("\n") || null,
+        messages,
+      };
+    }
+    case "get_session_status": {
+      const sessionId = encodeURIComponent(stringArg(args, "session_id"));
+      return engineJson(requestEngine, "/api/session/" + sessionId);
+    }
+    case "get_session_context": {
+      const sessionId = encodeURIComponent(stringArg(args, "session_id"));
+      return engineJson(requestEngine, "/api/session/" + sessionId + "/context");
+    }
+    case "get_session_diff": {
+      const sessionId = encodeURIComponent(stringArg(args, "session_id"));
+      const query = new URLSearchParams();
+      for (const key of ["from", "to", "context"] as const) {
+        if (typeof args[key] === "string" && (args[key] as string).trim()) {
+          query.set(key, (args[key] as string).trim());
+        }
+      }
+      const suffix = query.size ? "?" + query.toString() : "";
+      return engineJson(requestEngine, "/api/session/" + sessionId + "/diff" + suffix);
+    }
+    case "list_agents":
+      return engineJson(requestEngine, "/api/agent");
+    case "list_models":
+      return engineJson(requestEngine, "/api/model");
+    case "list_commands":
+      return engineJson(requestEngine, "/api/command");
+    case "find_files": {
+      const query = stringArg(args, "query");
+      const type = args.type === "directory" ? "directory" : "file";
+      const rawLimit = args.limit;
+      const limit = typeof rawLimit === "number" && Number.isInteger(rawLimit)
+        ? Math.min(100, Math.max(1, rawLimit)) : 50;
+      const params = new URLSearchParams({ query, type, limit: String(limit) });
+      return engineJson(requestEngine, "/api/fs/find?" + params.toString());
+    }
+    case "list_files": {
+      const path = typeof args.path === "string" ? args.path : ".";
+      return engineJson(requestEngine, "/api/fs/list?path=" + encodeURIComponent(path));
+    }
+    case "read_file": {
+      const path = stringArg(args, "path");
+      return engineJson(requestEngine, "/api/fs/read/" + path.split("/").map(encodeURIComponent).join("/"));
+    }
+    default:
+      throw new Error("Unknown tool: " + name);
+  }
+}
+
+/**
+ * Stateless Streamable HTTP MCP endpoint.
+ * It stays unusable until WEBUI_MCP_TOKEN is configured with a random secret
+ * of at least 32 characters. Do not remove this authentication: send_message
+ * can cause the connected OpenCode agent to change project files.
+ */
+export async function handleMcpBridge(req: Request, options: BridgeOptions): Promise<Response> {
+  const secret = options.token ?? process.env.WEBUI_MCP_TOKEN;
+  const header = req.headers.get("authorization");
+  const bearer = /^Bearer\s+(.+)$/i.exec(header ?? "")?.[1]?.trim() ?? "";
+  const staticToken = tokenIsValid(secret, header);
+  const origin = publicMcpOrigin(req);
+  const oauthAccess = !staticToken
+    ? verifyMcpAccessToken(bearer, secret, origin + "/mcp")
+    : null;
+  // Temporary Preview-only diagnostic mode. Without an Authorization header,
+  // expose only the non-sensitive health check; all project/session reads and
+  // every write-capable tool remain authenticated.
+  const publicDiagnosticOnly = process.env.WEBUI_MCP_ALLOW_NO_AUTH === "1" && !header;
+  if (!staticToken && !oauthAccess && !publicDiagnosticOnly) {
+    return new Response(JSON.stringify({ error: "MCP authorization is required." }), {
+      status: 401,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="opencode:read opencode:write"`,
+      },
+    });
+  }
+  if (req.method !== "POST") {
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: { allow: "POST", "cache-control": "no-store" },
+    });
+  }
+  if (!(req.headers.get("content-type") ?? "").toLowerCase().includes("application/json")) {
+    return jsonResponse({ error: "Content-Type must be application/json." }, 415);
+  }
+
+  let rpc: JsonRpcRequest;
+  try {
+    rpc = (await req.json()) as JsonRpcRequest;
+  } catch {
+    return rpcError(null, -32700, "Parse error");
+  }
+  if (!rpc || rpc.jsonrpc !== "2.0" || typeof rpc.method !== "string") {
+    return rpcError(rpc?.id, -32600, "Invalid Request");
+  }
+
+  const hasId = Object.prototype.hasOwnProperty.call(rpc, "id");
+  const id = hasId ? rpc.id : null;
+  const params = record(rpc.params);
+  const requestedHeaderVersion = req.headers.get("MCP-Protocol-Version");
+  const responseProtocolVersion = typeof requestedHeaderVersion === "string" &&
+    (PROTOCOL_VERSIONS as readonly string[]).includes(requestedHeaderVersion)
+    ? requestedHeaderVersion
+    : "2025-06-18";
+  if (!hasId && rpc.method.startsWith("notifications/")) {
+    return new Response(null, { status: 202, headers: { "cache-control": "no-store" } });
+  }
+  if (!hasId) return rpcError(null, -32600, "Request ID is required", 400, responseProtocolVersion);
+
+  try {
+    switch (rpc.method) {
+      case "initialize": {
+        const requested = params.protocolVersion;
+        const protocolVersion = typeof requested === "string" &&
+          (PROTOCOL_VERSIONS as readonly string[]).includes(requested)
+          ? requested
+          : "2025-06-18";
+        return jsonResponse({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            protocolVersion,
+            capabilities: { tools: { listChanged: false } },
+            serverInfo: { name: "opencode-webui-bridge", version: "0.1.0" },
+            instructions: "Use send_message to delegate a task to OpenCode. Review results before deployment.",
+          },
+        }, 200, protocolVersion);
+      }
+      case "ping":
+        return jsonResponse({ jsonrpc: "2.0", id, result: {} }, 200, responseProtocolVersion);
+      case "tools/list":
+        return jsonResponse({
+          jsonrpc: "2.0",
+          id,
+          result: { tools: publicDiagnosticOnly ? TOOLS.filter(tool => PUBLIC_DIAGNOSTIC_TOOLS.has(tool.name)) : TOOLS },
+        }, 200, responseProtocolVersion);
+      case "tools/call": {
+        const name = typeof params.name === "string" ? params.name : "";
+        try {
+          if (publicDiagnosticOnly && !PUBLIC_DIAGNOSTIC_TOOLS.has(name)) {
+            throw new Error("Restricted diagnostic mode permits only non-sensitive diagnostic tools. Authorization is required to access sessions/files or send tasks.");
+          }
+          if (oauthAccess) {
+            const writeTools = new Set(["create_session", "send_message"]);
+            const requiredScope = writeTools.has(name) ? "opencode:write" : "opencode:read";
+            if (!oauthAccess.scopes.includes(requiredScope)) {
+              throw new Error("The connected account has not granted the required permission: " + requiredScope);
+            }
+          }
+          const result = await callTool(name, params.arguments, options.requestEngine);
+          return jsonResponse({
+            jsonrpc: "2.0",
+            id,
+            result: { content: [{ type: "text", text: JSON.stringify(result) }], isError: false },
+          }, 200, responseProtocolVersion);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return jsonResponse({
+            jsonrpc: "2.0",
+            id,
+            result: { content: [{ type: "text", text: message }], isError: true },
+          }, 200, responseProtocolVersion);
+        }
+      }
+      default:
+        return rpcError(id, -32601, "Method not found: " + rpc.method, 404, responseProtocolVersion);
+    }
+  } catch {
+    return rpcError(id, -32603, "Internal MCP bridge error", 500, responseProtocolVersion);
+  }
+}

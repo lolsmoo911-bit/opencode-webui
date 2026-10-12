@@ -1,11 +1,16 @@
 name: prisma-deploy
 
 # The preview environment sets NODE_ENV=production and XDG_* paths for writable OpenCode state.
+# The MCP bridge feature branch is deployed only to its isolated Prisma preview.
+# Every branch push rebuilds the preview from the latest commit.
+# Preview OAuth settings are branch-scoped in Prisma; never set them on master.
 
 on:
   push:
     branches:
       - prisma-bootstrap
+      - feature/chatgpt-mcp-bridge
+  workflow_dispatch:
 
 concurrency:
   group: prisma-deploy-${{ github.ref }}
@@ -17,7 +22,8 @@ permissions:
 
 jobs:
   deploy:
-    if: github.ref_type == 'branch'
+    # Do not run a deployment when manually dispatched against the default branch.
+    if: github.ref_type == 'branch' && github.ref != 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,4 +34,4 @@ jobs:
       - uses: prisma/cloud-deploy-action@v1
         with:
           install-command: bun install
-          build-command: bun run build
+          build-command: bun run typecheck && bun run build

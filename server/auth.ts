@@ -419,6 +419,14 @@ export function guardRequest(
     // No Origin = curl/scripts/health checks — allowed. "null" = sandboxed
     // context — UNTRUSTED (a sandboxed iframe can send it); reject rather
     // than skip. Same-origin = pass.
+    const requestPath = new URL(req.url).pathname;
+    // ChatGPT may submit the OAuth consent form from an opaque/sandboxed
+    // origin. Permit that one POST only; the OAuth handler still verifies the
+    // submitted WEBUI_MCP_TOKEN, client, redirect URI, resource, scopes and PKCE.
+    // Keep rejecting opaque origins for MCP calls, token exchange and all other
+    // state-changing routes.
+    const oauthConsentPostWithOpaqueOrigin =
+      method === "POST" && requestPath === "/oauth/authorize" && origin === "null";
     if (origin && origin !== "null") {
       const proto =
         firstHeaderValue(req, "x-forwarded-proto") ??
@@ -426,7 +434,7 @@ export function guardRequest(
       const expected = `${proto}://${effectiveHost}`.toLowerCase();
       const actual = origin.replace(/\/+$/, "").toLowerCase();
       if (actual !== expected) return forbidden("cross-origin request blocked");
-    } else if (origin === "null") {
+    } else if (origin === "null" && !oauthConsentPostWithOpaqueOrigin) {
       return forbidden("null origin rejected");
     }
   }
